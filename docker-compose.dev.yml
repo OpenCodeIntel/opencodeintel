@@ -1,0 +1,45 @@
+# Development version with hot reload
+# Usage: docker compose -f docker-compose.dev.yml up
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: codeintel-redis-dev
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    networks:
+      - codeintel-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codeintel-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - API_KEY=${API_KEY}
+      - BACKEND_API_URL=http://backend:8000
+    volumes:
+      - ./backend:/app  # Mount entire backend for hot reload
+      - backend-venv:/app/venv  # Cache venv
+    depends_on:
+      - redis
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload  # Hot reload enabled
+    networks:
+      - codeintel-network
+
+networks:
+  codeintel-network:
+    driver: bridge
+
+volumes:
+  backend-venv:

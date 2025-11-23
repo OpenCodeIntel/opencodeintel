@@ -1,0 +1,110 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      working-directory: ./backend
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov httpx
+        pip install -r requirements.txt
+    
+    - name: Run tests
+      working-directory: ./backend
+      env:
+        DEBUG: "true"
+        API_KEY: "test-secret-key"
+      run: |
+        pytest tests/ -v --cov=services --cov-report=term-missing
+    
+    - name: Check code quality
+      working-directory: ./backend
+      run: |
+        pip install flake8
+        flake8 services/ --max-line-length=120 --ignore=E501,W503 || true
+
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: './frontend/package-lock.json'
+    
+    - name: Install dependencies
+      working-directory: ./frontend
+      run: npm ci
+    
+    - name: Build frontend
+      working-directory: ./frontend
+      run: npm run build
+    
+    - name: Check TypeScript
+      working-directory: ./frontend
+      run: npx tsc --noEmit
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Don't fail build on security warnings
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for TruffleHog
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
+        exit-code: '0'
+    
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      continue-on-error: true  # Don't fail on false positives
+      with:
+        path: ./
+        base: main
+        head: HEAD
+
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Don't fail build on style issues
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Lint Python
+      uses: py-actions/flake8@v2
+      continue-on-error: true
+      with:
+        path: "backend/services"
+        max-line-length: "120"
+        ignore: "E501,W503"
