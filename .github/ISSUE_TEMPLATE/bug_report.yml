@@ -1,0 +1,70 @@
+name: Bug Report
+description: Report a bug or issue with CodeIntel
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the details below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+      placeholder: Describe the bug clearly and concisely
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Run command...
+        2. Click on...
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs
+      description: Paste any relevant error messages or logs
+      render: shell
+      placeholder: Paste logs here
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of CodeIntel is affected?
+      options:
+        - Backend API
+        - Frontend UI
+        - MCP Server
+        - Dependency Analysis
+        - Search/Indexing
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which version of CodeIntel are you using?
+      placeholder: v0.2.0 or commit SHA
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: System information
+      placeholder: |
+        - OS: macOS 14.1
+        - Python: 3.11.5
+        - Node: 20.10.0
