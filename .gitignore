@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
+backend/.env
+backend/.env.local
+mcp-server/.env
+mcp-server/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Cloned repos
+backend/repos/
+!backend/repos/.gitkeep
+
+# MCP Server
+mcp-server/__pycache__/
