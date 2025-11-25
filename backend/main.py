@@ -2,7 +2,7 @@
 CodeIntel Backend API
 FastAPI backend for codebase intelligence
 """
-from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -82,34 +82,6 @@ metrics = PerformanceMetrics()
 rate_limiter = RateLimiter(redis_client=cache.redis if cache.redis else None)
 api_key_manager = APIKeyManager(get_supabase_service().client)
 cost_controller = CostController(get_supabase_service().client)
-
-# Development API Key (for local testing only)
-DEV_API_KEY = os.getenv("API_KEY", "dev-secret-key")
-
-
-def verify_api_key(authorization: str = Header(None)):
-    """Verify API key and check rate limits"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    
-    token = authorization.replace("Bearer ", "")
-    
-    # Allow dev key for local development
-    if token == DEV_API_KEY and os.getenv("DEBUG", "false").lower() == "true":
-        return {"key": token, "tier": "enterprise", "user_id": None, "name": "Development"}
-    
-    # Verify production API key
-    key_data = api_key_manager.verify_key(token)
-    if not key_data:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    
-    # Check rate limits
-    allowed, error_msg = rate_limiter.check_rate_limit(token, key_data.get("tier", "free"))
-    if not allowed:
-        raise HTTPException(status_code=429, detail=error_msg)
-    
-    return key_data
-
 
 # Request/Response Models
 class SearchRequest(BaseModel):
@@ -542,11 +514,9 @@ async def get_style_analysis(
 
 @app.get("/api/metrics")
 async def get_performance_metrics(
-    api_key: str = Header(None, alias="Authorization")
+    auth: AuthContext = Depends(require_auth)
 ):
     """Get performance metrics and monitoring data"""
-    verify_api_key(api_key)
-    
     return metrics.get_metrics()
 
 
@@ -560,16 +530,14 @@ class CreateAPIKeyRequest(BaseModel):
 @app.post("/api/keys/generate")
 async def generate_api_key(
     request: CreateAPIKeyRequest,
-    api_key: str = Header(None, alias="Authorization")
+    auth: AuthContext = Depends(require_auth)
 ):
     """Generate a new API key (requires existing valid key or dev mode)"""
-    key_data = verify_api_key(api_key)
-    
     # Generate new key
     new_key = api_key_manager.generate_key(
         name=request.name,
         tier=request.tier,
-        user_id=key_data.get("user_id")
+        user_id=auth.user_id
     )
     
     return {
@@ -582,21 +550,18 @@ async def generate_api_key(
 
 @app.get("/api/keys/usage")
 async def get_api_usage(
-    api_key: str = Header(None, alias="Authorization")
+    auth: AuthContext = Depends(require_auth)
 ):
     """Get current API usage stats"""
-    key_data = verify_api_key(api_key)
-    token = api_key.replace("Bearer ", "")
-    
-    usage = rate_limiter.get_usage(token)
+    usage = rate_limiter.get_usage(auth.identifier)
     
     return {
-        "tier": key_data.get("tier", "free"),
+        "tier": auth.tier,
         "limits": {
             "free": {"minute": 20, "hour": 200, "day": 1000},
             "pro": {"minute": 100, "hour": 2000, "day": 20000},
             "enterprise": {"minute": 500, "hour": 10000, "day": 100000}
-        }[key_data.get("tier", "free")],
+        }[auth.tier],
         "usage": usage
     }
 
