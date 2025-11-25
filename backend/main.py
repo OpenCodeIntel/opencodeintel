@@ -2,7 +2,7 @@
 CodeIntel Backend API
 FastAPI backend for codebase intelligence
 """
-from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -25,11 +25,18 @@ from services.rate_limiter import RateLimiter, APIKeyManager
 from services.supabase_service import get_supabase_service
 from services.input_validator import InputValidator, CostController
 
+# Import routers
+from routes.auth import router as auth_router
+from middleware.auth import get_current_user
+
 app = FastAPI(
     title="CodeIntel API",
     description="Codebase Intelligence API for MCP",
     version="0.2.0"
 )
+
+# Include routers
+app.include_router(auth_router)
 
 # CORS middleware
 app.add_middleware(
@@ -135,10 +142,12 @@ async def health_check():
 
 
 @app.get("/api/repos")
-async def list_repositories(api_key: str = Header(None, alias="Authorization")):
-    """List all repositories"""
-    verify_api_key(api_key)
+async def list_repositories(current_user: dict = Depends(get_current_user)):
+    """List all repositories for authenticated user"""
+    user_id = current_user["user_id"]
     
+    # TODO: Filter repos by user_id once we add user_id column to repositories table
+    # For now, return all repos (will fix in next section)
     repos = repo_manager.list_repos()
     return {"repositories": repos}
 
@@ -146,10 +155,10 @@ async def list_repositories(api_key: str = Header(None, alias="Authorization")):
 @app.post("/api/repos")
 async def add_repository(
     request: AddRepoRequest,
-    api_key: str = Header(None, alias="Authorization")
+    current_user: dict = Depends(get_current_user)
 ):
     """Add a new repository with validation and cost controls"""
-    key_data = verify_api_key(api_key)
+    user_id = current_user["user_id"]
     
     # Validate repository name
     valid_name, name_error = InputValidator.validate_repo_name(request.name)
@@ -162,10 +171,9 @@ async def add_repository(
         raise HTTPException(status_code=400, detail=f"Invalid Git URL: {url_error}")
     
     # Check repository limit
-    user_id = key_data.get("user_id")
-    api_key_hash = hashlib.sha256(api_key.replace("Bearer ", "").encode()).hexdigest()
+    user_id_hash = hashlib.sha256(user_id.encode()).hexdigest()
     
-    can_add, limit_error = cost_controller.check_repo_limit(user_id, api_key_hash)
+    can_add, limit_error = cost_controller.check_repo_limit(user_id, user_id_hash)
     if not can_add:
         raise HTTPException(status_code=429, detail=limit_error)
     
@@ -175,7 +183,7 @@ async def add_repository(
             git_url=request.git_url,
             branch=request.branch,
             user_id=user_id,
-            api_key_hash=api_key_hash
+            api_key_hash=user_id_hash
         )
         
         # Check repo size before allowing indexing

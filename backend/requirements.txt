@@ -5,6 +5,7 @@ httpx>=0.27.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
+email-validator>=2.0.0  # Required for EmailStr validation
 
 # WebSocket support
 websockets>=13.0
@@ -29,6 +30,7 @@ aiofiles>=24.0.0
 
 # Supabase (postgrest-py handled as dependency)
 supabase>=2.0.0
+pyjwt>=2.8.0  # JWT token verification for Supabase Auth
 
 # Testing
 pytest>=8.0.0
