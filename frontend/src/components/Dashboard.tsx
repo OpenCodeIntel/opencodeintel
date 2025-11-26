@@ -12,8 +12,7 @@ import { ImpactAnalyzer } from './ImpactAnalyzer'
 import { PerformanceDashboard } from './PerformanceDashboard'
 import { UserNav } from './UserNav'
 import type { Repository } from '../types'
-
-const API_URL = 'http://localhost:8000'
+import { API_URL } from '../config/api'
 
 type RepoTab = 'overview' | 'search' | 'dependencies' | 'insights' | 'impact'
 
