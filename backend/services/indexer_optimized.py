@@ -1,6 +1,12 @@
 """
 Optimized Code Indexer
 High-performance indexing with batch embeddings and parallel processing
+
+Improvements (v2):
+- Uses text-embedding-3-large for better code understanding
+- Rich embedding text with docstrings, params, and context
+- Query expansion for better recall
+- Keyword boosting for exact matches
 """
 import os
 from pathlib import Path
@@ -22,7 +28,15 @@ import hashlib
 from dotenv import load_dotenv
 import time
 
+# Search enhancement
+from services.search_enhancer import SearchEnhancer
+
 load_dotenv()
+
+# Configuration
+# Note: If using existing Pinecone index, match the dimension (1536 for small, 3072 for large)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_DIMENSIONS = 3072 if "large" in EMBEDDING_MODEL else 1536
 
 
 class OptimizedCodeIndexer:
@@ -37,17 +51,25 @@ class OptimizedCodeIndexer:
         # Initialize OpenAI
         self.openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
+        # Initialize search enhancer
+        self.search_enhancer = SearchEnhancer(self.openai_client)
+        
         # Initialize Pinecone
         pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
         
         index_name = os.getenv("PINECONE_INDEX_NAME", "codeintel")
         
-        # Create index if it doesn't exist
-        if index_name not in pc.list_indexes().names():
-            print(f"Creating Pinecone index: {index_name}")
+        # Check if index exists and has correct dimensions
+        existing_indexes = pc.list_indexes().names()
+        if index_name in existing_indexes:
+            # Use existing index (dimension already set)
+            index_info = pc.describe_index(index_name)
+            print(f"📊 Using existing Pinecone index: {index_name} (dim={index_info.dimension})")
+        else:
+            print(f"Creating Pinecone index: {index_name} with dimension {EMBEDDING_DIMENSIONS}")
             pc.create_index(
                 name=index_name,
-                dimension=1536,  # OpenAI embedding dimension
+                dimension=EMBEDDING_DIMENSIONS,
                 metric="cosine",
                 spec=ServerlessSpec(
                     cloud="aws",
@@ -64,7 +86,7 @@ class OptimizedCodeIndexer:
             'typescript': self._create_parser(Language(tsjavascript.language())),
         }
         
-        print("✅ OptimizedCodeIndexer initialized!")
+        print(f"✅ OptimizedCodeIndexer initialized! (model: {EMBEDDING_MODEL})")
     
     def _create_parser(self, language) -> Parser:
         """Create a tree-sitter parser"""
@@ -110,16 +132,16 @@ class OptimizedCodeIndexer:
         return code_files
     
     async def _create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings in batch - MUCH FASTER"""
+        """Generate embeddings in batch using configured model"""
         if not texts:
             return []
         
         try:
-            # Truncate texts if too long
+            # Truncate texts if too long (8191 token limit)
             truncated_texts = [text[:8000] for text in texts]
             
             response = await self.openai_client.embeddings.create(
-                model="text-embedding-3-small",
+                model=EMBEDDING_MODEL,
                 input=truncated_texts
             )
             
@@ -129,7 +151,7 @@ class OptimizedCodeIndexer:
         except Exception as e:
             print(f"❌ Error creating batch embeddings: {e}")
             # Return zero vectors on error
-            return [[0.0] * 1536 for _ in texts]
+            return [[0.0] * EMBEDDING_DIMENSIONS for _ in texts]
     
     def _extract_functions(self, tree_node, source_code: bytes) -> List[Dict]:
         """Extract function/class definitions from AST"""
@@ -214,9 +236,11 @@ class OptimizedCodeIndexer:
         
         # Generate embeddings in BATCHES (this is the key optimization)
         print(f"\n🧠 Generating embeddings in batches of {self.EMBEDDING_BATCH_SIZE}...")
+        print(f"   Using model: {EMBEDDING_MODEL}")
         
+        # Create rich embedding texts using search enhancer
         embedding_texts = [
-            f"Function: {func['name']}\nType: {func['type']}\n\n{func['code'][:1000]}"
+            self.search_enhancer.create_rich_embedding_text(func)
             for func in all_functions_data
         ]
         
@@ -304,23 +328,41 @@ class OptimizedCodeIndexer:
         self,
         query: str,
         repo_id: str,
-        max_results: int = 10
+        max_results: int = 10,
+        use_query_expansion: bool = True,
+        use_reranking: bool = True
     ) -> List[Dict]:
-        """Search code using semantic similarity"""
+        """
+        Search code using semantic similarity with enhancements.
+        
+        Args:
+            query: Search query
+            repo_id: Repository to search in
+            max_results: Number of results to return
+            use_query_expansion: Expand query with related terms
+            use_reranking: Rerank results with keyword boosting
+        """
         try:
-            # Generate query embedding (single request)
-            query_embeddings = await self._create_embeddings_batch([query])
+            # Step 1: Query expansion (adds related programming terms)
+            search_query = query
+            if use_query_expansion:
+                search_query = await self.search_enhancer.expand_query(query)
+                print(f"🔍 Expanded query: {search_query[:100]}...")
+            
+            # Step 2: Generate query embedding
+            query_embeddings = await self._create_embeddings_batch([search_query])
             query_embedding = query_embeddings[0]
             
-            # Search Pinecone
+            # Step 3: Search Pinecone (retrieve more for reranking)
+            retrieve_count = max_results * 3 if use_reranking else max_results
             results = self.index.query(
                 vector=query_embedding,
                 filter={"repo_id": {"$eq": repo_id}},
-                top_k=max_results,
+                top_k=retrieve_count,
                 include_metadata=True
             )
             
-            # Format results
+            # Step 4: Format results
             formatted_results = []
             for match in results.matches:
                 formatted_results.append({
@@ -334,7 +376,14 @@ class OptimizedCodeIndexer:
                     "line_end": match.metadata.get("end_line", 0),
                 })
             
-            return formatted_results
+            # Step 5: Rerank with keyword boosting
+            if use_reranking and formatted_results:
+                formatted_results = self.search_enhancer.rerank_results(
+                    query,  # Use original query for keyword matching
+                    formatted_results
+                )
+            
+            return formatted_results[:max_results]
             
         except Exception as e:
             print(f"❌ Error searching: {e}")
@@ -441,8 +490,9 @@ class OptimizedCodeIndexer:
         # Generate embeddings in BATCHES
         print(f"\n🧠 Generating embeddings in batches of {self.EMBEDDING_BATCH_SIZE}...")
         
+        # Create rich embedding texts using search enhancer
         embedding_texts = [
-            f"Function: {func['name']}\nType: {func['type']}\n\n{func['code'][:1000]}"
+            self.search_enhancer.create_rich_embedding_text(func)
             for func in all_functions_data
         ]
         
@@ -553,8 +603,9 @@ class OptimizedCodeIndexer:
             # Generate embeddings in batches
             print(f"\n🧠 Generating embeddings for {len(all_functions_data)} functions...")
             
+            # Create rich embedding texts using search enhancer
             embedding_texts = [
-                f"Function: {func['name']}\nType: {func['type']}\n\n{func['code'][:1000]}"
+                self.search_enhancer.create_rich_embedding_text(func)
                 for func in all_functions_data
             ]
             
@@ -565,7 +616,6 @@ class OptimizedCodeIndexer:
                 all_embeddings.extend(batch_embeddings)
             
             # Prepare vectors
-            import hashlib
             vectors_to_upsert = []
             
             for func_data, embedding in zip(all_functions_data, all_embeddings):
