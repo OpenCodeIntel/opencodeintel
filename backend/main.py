@@ -2,7 +2,7 @@
 CodeIntel Backend API
 FastAPI backend for codebase intelligence
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -114,6 +114,158 @@ async def health_check():
         "performance": perf_metrics["summary"]
     }
 
+
+# ============== PLAYGROUND (No Auth Required) ==============
+
+class PlaygroundSearchRequest(BaseModel):
+    query: str
+    demo_repo: str = "flask"
+    max_results: int = 10
+
+# Map demo repo names to actual repo IDs (will be populated on startup)
+DEMO_REPO_IDS = {}
+
+@app.on_event("startup")
+async def load_demo_repos():
+    """Load pre-indexed demo repos on startup"""
+    global DEMO_REPO_IDS
+    try:
+        repos = repo_manager.list_repos()
+        # Map common repo names to their IDs
+        for repo in repos:
+            name_lower = repo.get("name", "").lower()
+            if "flask" in name_lower:
+                DEMO_REPO_IDS["flask"] = repo["id"]
+            elif "fastapi" in name_lower:
+                DEMO_REPO_IDS["fastapi"] = repo["id"]
+            elif "express" in name_lower:
+                DEMO_REPO_IDS["express"] = repo["id"]
+            elif "react" in name_lower:
+                DEMO_REPO_IDS["react"] = repo["id"]
+        print(f"📦 Loaded demo repos: {list(DEMO_REPO_IDS.keys())}")
+    except Exception as e:
+        print(f"⚠️ Could not load demo repos: {e}")
+
+# Simple in-memory rate limiting for playground (IP-based)
+from collections import defaultdict
+import time as time_module
+
+playground_rate_limits = defaultdict(list)
+PLAYGROUND_LIMIT = 10  # searches per hour
+PLAYGROUND_WINDOW = 3600  # 1 hour in seconds
+
+def check_playground_rate_limit(ip: str) -> tuple[bool, int]:
+    """Check if IP is within rate limit. Returns (allowed, remaining)"""
+    now = time_module.time()
+    # Clean old entries
+    playground_rate_limits[ip] = [t for t in playground_rate_limits[ip] if now - t < PLAYGROUND_WINDOW]
+    
+    remaining = PLAYGROUND_LIMIT - len(playground_rate_limits[ip])
+    if remaining <= 0:
+        return False, 0
+    
+    return True, remaining
+
+def record_playground_search(ip: str):
+    """Record a playground search for rate limiting"""
+    playground_rate_limits[ip].append(time_module.time())
+
+
+@app.post("/api/playground/search")
+async def playground_search(request: PlaygroundSearchRequest, req: Request):
+    """
+    Public playground search - no auth required, rate limited by IP.
+    Only works with pre-indexed demo repositories.
+    """
+    # Get client IP
+    client_ip = req.client.host if req.client else "unknown"
+    forwarded = req.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    
+    # Check rate limit
+    allowed, remaining = check_playground_rate_limit(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429, 
+            detail="Rate limit exceeded. Sign up for unlimited searches!"
+        )
+    
+    # Validate query
+    valid_query, query_error = InputValidator.validate_search_query(request.query)
+    if not valid_query:
+        raise HTTPException(status_code=400, detail=f"Invalid query: {query_error}")
+    
+    # Get demo repo ID
+    repo_id = DEMO_REPO_IDS.get(request.demo_repo)
+    if not repo_id:
+        # Fallback: try to find any indexed repo
+        repos = repo_manager.list_repos()
+        indexed_repos = [r for r in repos if r.get("status") == "indexed"]
+        if indexed_repos:
+            repo_id = indexed_repos[0]["id"]
+        else:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Demo repo '{request.demo_repo}' not available. Available: {list(DEMO_REPO_IDS.keys())}"
+            )
+    
+    import time
+    start_time = time.time()
+    
+    try:
+        # Sanitize query
+        sanitized_query = InputValidator.sanitize_string(request.query, max_length=200)
+        
+        # Check cache first
+        cache_key = f"playground:{request.demo_repo}:{sanitized_query}"
+        cached_results = cache.get_search_results(sanitized_query, repo_id)
+        if cached_results:
+            return {
+                "results": cached_results, 
+                "count": len(cached_results), 
+                "cached": True,
+                "remaining_searches": remaining
+            }
+        
+        # Do search
+        results = await indexer.semantic_search(
+            query=sanitized_query,
+            repo_id=repo_id,
+            max_results=min(request.max_results, 10),  # Cap at 10 for playground
+            use_query_expansion=True,
+            use_reranking=True
+        )
+        
+        # Cache results
+        cache.set_search_results(sanitized_query, repo_id, results, ttl=3600)
+        
+        # Record for rate limiting
+        record_playground_search(client_ip)
+        
+        return {
+            "results": results, 
+            "count": len(results), 
+            "cached": False,
+            "remaining_searches": remaining - 1
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/playground/repos")
+async def list_playground_repos():
+    """List available demo repositories for playground"""
+    return {
+        "repos": [
+            {"id": "flask", "name": "Flask", "description": "Python web framework", "available": "flask" in DEMO_REPO_IDS},
+            {"id": "fastapi", "name": "FastAPI", "description": "Modern Python API", "available": "fastapi" in DEMO_REPO_IDS},
+            {"id": "express", "name": "Express", "description": "Node.js framework", "available": "express" in DEMO_REPO_IDS},
+        ]
+    }
+
+
+# ============== AUTHENTICATED ENDPOINTS ==============
 
 @app.get("/api/repos")
 async def list_repositories(auth: AuthContext = Depends(require_auth)):
@@ -357,7 +509,9 @@ async def search_code(
         results = await indexer.semantic_search(
             query=sanitized_query,
             repo_id=request.repo_id,
-            max_results=min(request.max_results, 50)  # Cap at 50 results
+            max_results=min(request.max_results, 50),  # Cap at 50 results
+            use_query_expansion=True,
+            use_reranking=True
         )
         
         # Cache results
