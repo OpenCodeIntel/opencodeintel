@@ -10,12 +10,15 @@ import os
 
 # Set test environment BEFORE imports
 os.environ["DEBUG"] = "true"
-os.environ["API_KEY"] = "test-secret-key"
+os.environ["DEV_API_KEY"] = "test-secret-key"  # New env var for dev key
+os.environ["API_KEY"] = "test-secret-key"  # Legacy support
 os.environ["OPENAI_API_KEY"] = "sk-test-key"
 os.environ["PINECONE_API_KEY"] = "pcsk-test"
 os.environ["PINECONE_INDEX_NAME"] = "test-index"
 os.environ["SUPABASE_URL"] = "https://test.supabase.co"
 os.environ["SUPABASE_KEY"] = "test-key"
+os.environ["SUPABASE_ANON_KEY"] = "test-anon-key"
+os.environ["SUPABASE_JWT_SECRET"] = "test-jwt-secret"
 
 # Add backend to path
 backend_dir = Path(__file__).parent.parent
@@ -109,7 +112,31 @@ def mock_git():
 
 @pytest.fixture
 def client():
-    """TestClient with mocked dependencies"""
+    """TestClient with mocked dependencies and auth bypass for testing"""
+    from fastapi.testclient import TestClient
+    from main import app
+    from middleware.auth import AuthContext
+    
+    # Override the require_auth dependency to always return a valid context
+    async def mock_require_auth():
+        return AuthContext(
+            user_id="test-user-123",
+            email="test@example.com",
+            tier="enterprise"
+        )
+    
+    from middleware.auth import require_auth
+    app.dependency_overrides[require_auth] = mock_require_auth
+    
+    yield TestClient(app)
+    
+    # Cleanup
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_no_auth():
+    """TestClient WITHOUT auth bypass - for testing auth behavior"""
     from fastapi.testclient import TestClient
     from main import app
     return TestClient(app)
@@ -117,7 +144,7 @@ def client():
 
 @pytest.fixture
 def valid_headers():
-    """Valid authentication headers"""
+    """Valid authentication headers (not actually used with mocked auth, but kept for compatibility)"""
     return {"Authorization": "Bearer test-secret-key"}
 
 
