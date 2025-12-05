@@ -83,6 +83,29 @@ rate_limiter = RateLimiter(redis_client=cache.redis if cache.redis else None)
 api_key_manager = APIKeyManager(get_supabase_service().client)
 cost_controller = CostController(get_supabase_service().client)
 
+
+# ===== SECURITY HELPERS =====
+
+def get_repo_or_404(repo_id: str, user_id: str) -> dict:
+    """
+    Get repository with ownership verification.
+    Returns 404 if repo doesn't exist OR if user doesn't own it.
+    (We return 404 instead of 403 to not leak info about repo existence)
+    """
+    repo = repo_manager.get_repo_for_user(repo_id, user_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return repo
+
+
+def verify_repo_access(repo_id: str, user_id: str) -> None:
+    """
+    Verify user has access to repository.
+    Raises 404 if no access (not 403, to avoid leaking repo existence).
+    """
+    if not repo_manager.verify_ownership(repo_id, user_id):
+        raise HTTPException(status_code=404, detail="Repository not found")
+
 # Request/Response Models
 class SearchRequest(BaseModel):
     query: str
@@ -272,9 +295,11 @@ async def list_repositories(auth: AuthContext = Depends(require_auth)):
     """List all repositories for authenticated user"""
     user_id = auth.user_id
     
-    # TODO: Filter repos by user_id once we add user_id column to repositories table
-    # For now, return all repos (will fix in next section)
-    repos = repo_manager.list_repos()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    # Only return repos owned by this user
+    repos = repo_manager.list_repos_for_user(user_id)
     return {"repositories": repos}
 
 
@@ -369,16 +394,18 @@ async def websocket_index(websocket: WebSocket, repo_id: str):
     if not user:
         return
     
-    # TODO: Add repo ownership validation once user_id column exists in repos table
-    # For now, any authenticated user can index any repo they know the ID of
+    user_id = user.get("user_id")
+    if not user_id:
+        await websocket.close(code=4001, reason="User ID required")
+        return
     
-    # Validate repo exists before accepting connection
-    repo = repo_manager.get_repo(repo_id)
+    # Verify user owns this repository (return same error to not leak info)
+    repo = repo_manager.get_repo_for_user(repo_id, user_id)
     if not repo:
         await websocket.close(code=4004, reason="Repository not found")
         return
     
-    # Connection authenticated and repo valid - accept
+    # Connection authenticated and repo ownership verified - accept
     await websocket.accept()
     
     try:
@@ -432,9 +459,8 @@ async def index_repository(
     start_time = time.time()
     
     try:
-        repo = repo_manager.get_repo(repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership - returns 404 if not owned
+        repo = get_repo_or_404(repo_id, auth.user_id)
         
         # Set status to indexing
         repo_manager.update_status(repo_id, "indexing")
@@ -486,6 +512,9 @@ async def search_code(
 ):
     """Search code semantically with caching and validation"""
     
+    # Verify user owns the repository
+    verify_repo_access(request.repo_id, auth.user_id)
+    
     # Validate search query
     valid_query, query_error = InputValidator.validate_search_query(request.query)
     if not valid_query:
@@ -534,9 +563,8 @@ async def explain_code(
     """Generate code explanation"""
     
     try:
-        repo = repo_manager.get_repo(request.repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership
+        repo = get_repo_or_404(request.repo_id, auth.user_id)
         
         explanation = await indexer.explain_code(
             repo_id=request.repo_id,
@@ -545,6 +573,8 @@ async def explain_code(
         )
         
         return {"explanation": explanation}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -565,9 +595,8 @@ async def get_dependency_graph(
     """Get dependency graph for repository with Supabase caching"""
     
     try:
-        repo = repo_manager.get_repo(repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership
+        repo = get_repo_or_404(repo_id, auth.user_id)
         
         # Try loading from Supabase cache
         cached_graph = dependency_analyzer.load_from_cache(repo_id)
@@ -598,9 +627,8 @@ async def analyze_impact(
     """Analyze impact of changing a file with validation and caching"""
     
     try:
-        repo = repo_manager.get_repo(repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership
+        repo = get_repo_or_404(repo_id, auth.user_id)
         
         # Validate file path
         valid_path, path_error = InputValidator.validate_file_path(request.file_path, repo["local_path"])
@@ -637,9 +665,8 @@ async def get_repository_insights(
     """Get comprehensive insights about repository with Supabase caching"""
     
     try:
-        repo = repo_manager.get_repo(repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership
+        repo = get_repo_or_404(repo_id, auth.user_id)
         
         # Try loading cached graph from Supabase
         graph_data = dependency_analyzer.load_from_cache(repo_id)
@@ -679,9 +706,8 @@ async def get_style_analysis(
     """Analyze code style and team patterns with Supabase caching"""
     
     try:
-        repo = repo_manager.get_repo(repo_id)
-        if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+        # Verify ownership
+        repo = get_repo_or_404(repo_id, auth.user_id)
         
         # Try loading from Supabase cache
         cached_style = style_analyzer.load_from_cache(repo_id)

@@ -83,9 +83,21 @@ class RepositoryManager:
         repos = self.db.list_repositories()
         return repos
     
+    def list_repos_for_user(self, user_id: str) -> List[dict]:
+        """List repositories owned by a specific user"""
+        return self.db.list_repositories_for_user(user_id)
+    
     def get_repo(self, repo_id: str) -> Optional[dict]:
         """Get repository by ID from Supabase"""
         return self.db.get_repository(repo_id)
+    
+    def get_repo_for_user(self, repo_id: str, user_id: str) -> Optional[dict]:
+        """Get repository only if owned by user"""
+        return self.db.get_repository_with_owner(repo_id, user_id)
+    
+    def verify_ownership(self, repo_id: str, user_id: str) -> bool:
+        """Verify user owns repository"""
+        return self.db.verify_repo_ownership(repo_id, user_id)
     
     def add_repo(self, name: str, git_url: str, branch: str = "main", user_id: Optional[str] = None, api_key_hash: Optional[str] = None) -> dict:
         """Add a new repository"""

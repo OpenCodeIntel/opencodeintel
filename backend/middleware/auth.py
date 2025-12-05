@@ -82,9 +82,12 @@ def _validate_jwt(token: str) -> Optional[AuthContext]:
 
 def _validate_api_key(token: str) -> Optional[AuthContext]:
     """Validate API key (ci_xxx format)"""
-    # Dev key for local development
-    dev_key = os.getenv("API_KEY", "dev-secret-key")
-    if token == dev_key and os.getenv("DEBUG", "false").lower() == "true":
+    # Dev key ONLY works in explicit DEBUG mode AND must be explicitly set
+    # This prevents accidental use of dev keys in production
+    debug_mode = os.getenv("DEBUG", "false").lower() == "true"
+    dev_key = os.getenv("DEV_API_KEY")  # Must be explicitly set, no default
+    
+    if debug_mode and dev_key and token == dev_key:
         return AuthContext(
             api_key_name="development",
             tier="enterprise"

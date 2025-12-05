@@ -67,6 +67,21 @@ class SupabaseService:
         result = self.client.table("repositories").select("*").order("created_at", desc=True).execute()
         return result.data or []
     
+    def list_repositories_for_user(self, user_id: str) -> List[Dict]:
+        """List repositories owned by a specific user"""
+        result = self.client.table("repositories").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+        return result.data or []
+    
+    def get_repository_with_owner(self, repo_id: str, user_id: str) -> Optional[Dict]:
+        """Get repository only if owned by user (returns None if not owned)"""
+        result = self.client.table("repositories").select("*").eq("id", repo_id).eq("user_id", user_id).execute()
+        return result.data[0] if result.data else None
+    
+    def verify_repo_ownership(self, repo_id: str, user_id: str) -> bool:
+        """Check if user owns repository"""
+        result = self.client.table("repositories").select("id").eq("id", repo_id).eq("user_id", user_id).execute()
+        return bool(result.data)
+    
     def update_repository(self, repo_id: str, updates: Dict) -> Optional[Dict]:
         """Update repository fields"""
         result = self.client.table("repositories").update(updates).eq("id", repo_id).execute()
