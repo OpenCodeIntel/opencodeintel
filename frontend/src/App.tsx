@@ -1,8 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
-import { Playground } from './pages/Playground';
+import { LandingPage } from './pages/LandingPage';
 import { Dashboard } from './components/Dashboard';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -10,8 +10,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0b]">
+        <div className="text-lg text-white">Loading...</div>
       </div>
     );
   }
@@ -23,8 +23,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function PlaygroundWrapper() {
-  const navigate = useNavigate();
+function LandingWrapper() {
   const { user } = useAuth();
 
   // If user is logged in, redirect to dashboard
@@ -32,7 +31,7 @@ function PlaygroundWrapper() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  return <Playground onSignupClick={() => navigate('/signup')} />;
+  return <LandingPage />;
 }
 
 function AppRoutes() {
@@ -40,8 +39,8 @@ function AppRoutes() {
 
   return (
     <Routes>
-      {/* Playground is the new landing page */}
-      <Route path="/" element={<PlaygroundWrapper />} />
+      {/* New Landing Page */}
+      <Route path="/" element={<LandingWrapper />} />
       
       <Route 
         path="/login" 
@@ -60,7 +59,7 @@ function AppRoutes() {
         }
       />
       
-      {/* Legacy route redirect */}
+      {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
