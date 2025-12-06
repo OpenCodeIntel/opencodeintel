@@ -53,9 +53,9 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6">
       {/* Search */}
-      <div className="card p-6">
+      <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
         <form onSubmit={handleSearch}>
           <div className="flex gap-3">
             <input
@@ -63,36 +63,36 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="e.g., authentication middleware, React hooks, database queries..."
-              className="input flex-1"
+              className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
               disabled={loading}
               autoFocus
             />
             <button
               type="submit"
-              className="btn-primary px-6"
+              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-xl transition-all disabled:opacity-50"
               disabled={loading}
             >
               {loading ? 'Searching...' : 'Search'}
             </button>
           </div>
-          <p className="mt-2 text-xs text-gray-500">
+          <p className="mt-3 text-xs text-gray-500">
             Powered by semantic embeddings - finds code by meaning, not just keywords
           </p>
         </form>
 
         {searchTime !== null && (
-          <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-4 text-sm text-gray-600">
+          <div className="mt-4 pt-4 border-t border-white/5 flex items-center gap-4 text-sm text-gray-400">
             <span>
-              <span className="font-semibold text-gray-900">{results.length}</span> results
+              <span className="font-semibold text-white">{results.length}</span> results
             </span>
-            <span className="text-gray-300">•</span>
+            <span className="text-gray-600">•</span>
             <span>
-              <span className="font-mono font-semibold text-gray-900">{searchTime}ms</span>
+              <span className="font-mono font-semibold text-white">{searchTime}ms</span>
             </span>
             {cached && (
               <>
-                <span className="text-gray-300">•</span>
-                <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-md">
+                <span className="text-gray-600">•</span>
+                <span className="text-xs bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded-md">
                   ⚡ Cached
                 </span>
               </>
@@ -104,15 +104,15 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
       {/* Results */}
       <div className="space-y-4">
         {results.map((result, idx) => (
-          <div key={idx} className="card p-6 hover:shadow-md transition-shadow group">
+          <div key={idx} className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5 hover:border-white/10 transition-all group">
             {/* Header */}
             <div className="flex items-start justify-between mb-4">
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-mono font-semibold text-sm text-gray-900">
+                  <h3 className="font-mono font-semibold text-sm text-white">
                     {result.name}
                   </h3>
-                  <span className="badge-neutral text-[10px] uppercase tracking-wide">
+                  <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide bg-white/5 text-gray-400 border border-white/10 rounded">
                     {result.type.replace('_', ' ')}
                   </span>
                 </div>
@@ -124,7 +124,7 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
               <div className="flex items-center gap-3">
                 <div className="text-right">
                   <div className="text-xs font-mono text-gray-500">Match</div>
-                  <div className="text-sm font-mono font-semibold text-blue-600">
+                  <div className="text-sm font-mono font-semibold text-blue-400">
                     {(result.score * 100).toFixed(0)}%
                   </div>
                 </div>
@@ -132,8 +132,9 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
                   onClick={(e) => {
                     e.stopPropagation()
                     navigator.clipboard.writeText(result.code)
+                    toast.success('Code copied!')
                   }}
-                  className="btn-ghost px-3 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                   title="Copy code"
                 >
                   Copy
@@ -142,7 +143,7 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
             </div>
 
             {/* Code with Syntax Highlighting */}
-            <div className="relative">
+            <div className="relative rounded-lg overflow-hidden">
               <SyntaxHighlighter
                 language={result.language}
                 style={oneDark}
@@ -151,6 +152,7 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
                   borderRadius: '0.5rem',
                   fontSize: '0.75rem',
                   lineHeight: '1.5',
+                  background: '#0d0d0f',
                 }}
                 showLineNumbers
                 startingLineNumber={result.line_start}
@@ -159,7 +161,7 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
               </SyntaxHighlighter>
               
               <div className="absolute top-3 right-3">
-                <span className="badge-neutral text-[10px] font-mono uppercase bg-gray-900/80 backdrop-blur">
+                <span className="px-2 py-0.5 text-[10px] font-mono uppercase bg-black/50 text-gray-400 backdrop-blur rounded">
                   {result.language}
                 </span>
               </div>
@@ -170,8 +172,8 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
               <span className="font-mono">
                 Lines {result.line_start}–{result.line_end}
               </span>
-              <span className="text-gray-300">•</span>
-              <span className="text-gray-400 truncate">
+              <span className="text-gray-600">•</span>
+              <span className="text-gray-500 truncate">
                 {result.file_path}
               </span>
             </div>
@@ -181,12 +183,12 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
 
       {/* Empty State */}
       {results.length === 0 && query && !loading && (
-        <div className="card p-16 text-center">
-          <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-16 text-center">
+          <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-white/5 flex items-center justify-center">
             <span className="text-4xl">🔍</span>
           </div>
-          <h3 className="text-base font-semibold mb-2 text-gray-900">No results found</h3>
-          <p className="text-sm text-gray-600">
+          <h3 className="text-base font-semibold mb-2 text-white">No results found</h3>
+          <p className="text-sm text-gray-400">
             Try a different query or check if the repository is fully indexed
           </p>
         </div>
