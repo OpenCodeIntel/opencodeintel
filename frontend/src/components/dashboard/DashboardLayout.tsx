@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopNav } from './TopNav'
+import { CommandPalette } from './CommandPalette'
 import { Toaster } from '@/components/ui/sonner'
+import { useKeyboardShortcut, SHORTCUTS } from '../../hooks/useKeyboardShortcut'
 
 interface DashboardLayoutProps {
   children?: React.ReactNode
@@ -10,6 +12,16 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+
+  // Keyboard shortcuts
+  useKeyboardShortcut(SHORTCUTS.COMMAND_PALETTE, () => {
+    setCommandPaletteOpen(true)
+  })
+
+  useKeyboardShortcut(SHORTCUTS.TOGGLE_SIDEBAR, () => {
+    setSidebarCollapsed(prev => !prev)
+  })
 
   return (
     <div className="min-h-screen bg-[#09090b]">
@@ -17,6 +29,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <TopNav 
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         sidebarCollapsed={sidebarCollapsed}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
 
       <div className="flex">
@@ -37,6 +50,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
         </main>
       </div>
+
+      {/* Command Palette */}
+      <CommandPalette 
+        isOpen={commandPaletteOpen} 
+        onClose={() => setCommandPaletteOpen(false)} 
+      />
 
       <Toaster 
         theme="dark" 

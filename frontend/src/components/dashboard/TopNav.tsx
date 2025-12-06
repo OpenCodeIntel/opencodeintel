@@ -5,6 +5,7 @@ import { useState } from 'react'
 interface TopNavProps {
   onToggleSidebar: () => void
   sidebarCollapsed: boolean
+  onOpenCommandPalette?: () => void
 }
 
 // Icons
@@ -32,7 +33,7 @@ const CodeIntelLogo = () => (
   </div>
 )
 
-export function TopNav({ onToggleSidebar, sidebarCollapsed }: TopNavProps) {
+export function TopNav({ onToggleSidebar, sidebarCollapsed, onOpenCommandPalette }: TopNavProps) {
   const { session, signOut } = useAuth()
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -61,11 +62,7 @@ export function TopNav({ onToggleSidebar, sidebarCollapsed }: TopNavProps) {
         {/* Center - Command Palette Trigger */}
         <button 
           className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all max-w-xs"
-          onClick={() => {
-            // TODO: Open command palette
-            const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true })
-            window.dispatchEvent(event)
-          }}
+          onClick={onOpenCommandPalette}
         >
           <SearchIcon />
           <span className="text-sm">Search...</span>
