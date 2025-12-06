@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { Progress } from '@/components/ui/progress'
 import type { Repository } from '../types'
 import { WS_URL } from '../config/api'
+import { useInvalidateRepoCache } from '../hooks/useCachedQuery'
 
 interface RepoOverviewProps {
   repo: Repository
@@ -23,6 +24,9 @@ export function RepoOverview({ repo, onReindex, apiUrl, apiKey }: RepoOverviewPr
   const [progress, setProgress] = useState<IndexProgress | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const completedRef = useRef(false)
+  
+  // Cache invalidation hook
+  const invalidateCache = useInvalidateRepoCache()
 
   useEffect(() => {
     return () => {
@@ -62,6 +66,8 @@ export function RepoOverview({ repo, onReindex, apiUrl, apiKey }: RepoOverviewPr
           toast.success(`Indexing complete! ${data.total_functions} functions indexed.`, { id: 'reindex' })
           setIndexing(false)
           setProgress(null)
+          // Invalidate caches after re-index
+          invalidateCache(repo.id)
           onReindex()
         } else if (data.type === 'error') {
           completedRef.current = true

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useStyleAnalysis } from '../hooks/useCachedQuery'
 
 interface StyleInsightsProps {
   repoId: string
@@ -7,27 +7,8 @@ interface StyleInsightsProps {
 }
 
 export function StyleInsights({ repoId, apiUrl, apiKey }: StyleInsightsProps) {
-  const [data, setData] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    loadStyleData()
-  }, [repoId])
-
-  const loadStyleData = async () => {
-    setLoading(true)
-    try {
-      const response = await fetch(`${apiUrl}/api/repos/${repoId}/style-analysis`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` }
-      })
-      const result = await response.json()
-      setData(result)
-    } catch (error) {
-      console.error('Error loading style data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  // Use cached query for style analysis
+  const { data, isLoading: loading } = useStyleAnalysis({ repoId, apiKey })
 
   if (loading) {
     return (

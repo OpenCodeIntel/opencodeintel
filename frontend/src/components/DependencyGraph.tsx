@@ -11,6 +11,7 @@ import ReactFlow, {
 } from 'reactflow'
 import dagre from 'dagre'
 import 'reactflow/dist/style.css'
+import { useDependencyGraph } from '../hooks/useCachedQuery'
 
 interface DependencyGraphProps {
   repoId: string
@@ -47,7 +48,6 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
 export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
-  const [loading, setLoading] = useState(true)
   const [metrics, setMetrics] = useState<any>(null)
   const [filterCritical, setFilterCritical] = useState(false)
   const [minDeps, setMinDeps] = useState(0)
@@ -55,9 +55,18 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
   const [allNodes, setAllNodes] = useState<Node[]>([])
   const [allEdges, setAllEdges] = useState<Edge[]>([])
 
+  // Use cached query for dependencies
+  const { data, isLoading: loading, isFetching } = useDependencyGraph({ 
+    repoId, 
+    apiKey 
+  })
+
+  // Process data when it arrives
   useEffect(() => {
-    loadGraph()
-  }, [repoId])
+    if (data) {
+      processGraphData(data)
+    }
+  }, [data])
 
   useEffect(() => {
     if (allNodes.length > 0) {
@@ -89,83 +98,67 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
     setEdges(layoutedEdges)
   }
 
-  const loadGraph = async () => {
-    setLoading(true)
-    try {
-      const response = await fetch(`${apiUrl}/api/repos/${repoId}/dependencies`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
-        }
-      })
+  const processGraphData = (data: any) => {
+    const flowNodes: Node[] = data.nodes.map((node: any) => {
+      const fileName = node.label || node.id.split('/').pop()
+      const fullPath = node.id
+      const importCount = node.import_count || node.imports || 0
       
-      const data = await response.json()
-      
-      const flowNodes: Node[] = data.nodes.map((node: any) => {
-        const fileName = node.label || node.id.split('/').pop()
-        const fullPath = node.id
-        const importCount = node.import_count || node.imports || 0
-        
-        return {
-          id: node.id,
-          type: 'default',
-          data: { 
-            label: (
-              <div title={fullPath} style={{ cursor: 'pointer' }}>
-                <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '4px' }}>
-                  {fileName}
-                </div>
-                {importCount > 0 && (
-                  <div style={{ fontSize: '9px', opacity: 0.8 }}>
-                    {importCount} imports
-                  </div>
-                )}
+      return {
+        id: node.id,
+        type: 'default',
+        data: { 
+          label: (
+            <div title={fullPath} style={{ cursor: 'pointer' }}>
+              <div style={{ fontWeight: 600, fontSize: '11px', marginBottom: '4px' }}>
+                {fileName}
               </div>
-            ),
-            language: node.language,
-            imports: importCount
-          },
-          position: { x: 0, y: 0 },
-          style: {
-            background: getLanguageColor(node.language),
-            color: 'white',
-            border: '2px solid #3b82f6',
-            borderRadius: '8px',
-            padding: '8px 12px',
-            fontSize: '11px',
-            fontFamily: 'monospace',
-            width: 180,
-            height: 60
-          }
-        }
-      })
-      
-      const flowEdges: Edge[] = data.edges.map((edge: any) => ({
-        id: `${edge.source}-${edge.target}`,
-        source: edge.source,
-        target: edge.target,
-        animated: false,
-        style: { stroke: '#4b5563', strokeWidth: 1.5 },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: '#4b5563',
+              {importCount > 0 && (
+                <div style={{ fontSize: '9px', opacity: 0.8 }}>
+                  {importCount} imports
+                </div>
+              )}
+            </div>
+          ),
+          language: node.language,
+          imports: importCount
         },
-      }))
-      
-      setAllNodes(flowNodes)
-      setAllEdges(flowEdges)
-      setMetrics(data.metrics)
-      
-      const { nodes: layoutedNodes, edges: layoutedEdges } = 
-        getLayoutedElements(flowNodes, flowEdges)
-      
-      setNodes(layoutedNodes)
-      setEdges(layoutedEdges)
-      
-    } catch (error) {
-      console.error('Error loading graph:', error)
-    } finally {
-      setLoading(false)
-    }
+        position: { x: 0, y: 0 },
+        style: {
+          background: getLanguageColor(node.language),
+          color: 'white',
+          border: '2px solid #3b82f6',
+          borderRadius: '8px',
+          padding: '8px 12px',
+          fontSize: '11px',
+          fontFamily: 'monospace',
+          width: 180,
+          height: 60
+        }
+      }
+    })
+    
+    const flowEdges: Edge[] = data.edges.map((edge: any) => ({
+      id: `${edge.source}-${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      animated: false,
+      style: { stroke: '#4b5563', strokeWidth: 1.5 },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: '#4b5563',
+      },
+    }))
+    
+    setAllNodes(flowNodes)
+    setAllEdges(flowEdges)
+    setMetrics(data.metrics)
+    
+    const { nodes: layoutedNodes, edges: layoutedEdges } = 
+      getLayoutedElements(flowNodes, flowEdges)
+    
+    setNodes(layoutedNodes)
+    setEdges(layoutedEdges)
   }
 
   const handleNodeClick = useCallback((event: any, node: Node) => {
