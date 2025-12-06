@@ -100,7 +100,6 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
       
       const data = await response.json()
       
-      // Convert to React Flow format
       const flowNodes: Node[] = data.nodes.map((node: any) => {
         const fileName = node.label || node.id.split('/').pop()
         const fullPath = node.id
@@ -145,10 +144,10 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
         source: edge.source,
         target: edge.target,
         animated: false,
-        style: { stroke: '#94a3b8', strokeWidth: 1.5 },
+        style: { stroke: '#4b5563', strokeWidth: 1.5 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: '#94a3b8',
+          color: '#4b5563',
         },
       }))
       
@@ -172,7 +171,6 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
   const handleNodeClick = useCallback((event: any, node: Node) => {
     setHighlightedNode(node.id)
     
-    // Highlight connected nodes
     const connectedNodeIds = new Set<string>()
     connectedNodeIds.add(node.id)
     
@@ -232,67 +230,67 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
 
   if (loading) {
     return (
-      <div className="card p-12 text-center">
-        <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-gray-600">Building dependency graph...</p>
+      <div className="p-12 text-center">
+        <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-gray-400">Building dependency graph...</p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      {/* Metrics + Controls */}
+    <div className="p-6 space-y-6">
+      {/* Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card p-5">
-          <div className="text-sm text-gray-600 mb-1">Total Files</div>
-          <div className="text-3xl font-bold text-gray-900">{allNodes.length}</div>
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+          <div className="text-sm text-gray-400 mb-1">Total Files</div>
+          <div className="text-3xl font-bold text-white">{allNodes.length}</div>
         </div>
-        <div className="card p-5">
-          <div className="text-sm text-gray-600 mb-1">Dependencies</div>
-          <div className="text-3xl font-bold text-blue-600">{edges.length}</div>
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+          <div className="text-sm text-gray-400 mb-1">Dependencies</div>
+          <div className="text-3xl font-bold text-blue-400">{edges.length}</div>
         </div>
-        <div className="card p-5">
-          <div className="text-sm text-gray-600 mb-1">Avg per File</div>
-          <div className="text-3xl font-bold text-gray-900">
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+          <div className="text-sm text-gray-400 mb-1">Avg per File</div>
+          <div className="text-3xl font-bold text-white">
             {metrics?.avg_dependencies?.toFixed(1) || 0}
           </div>
         </div>
-        <div className="card p-5">
-          <div className="text-sm text-gray-600 mb-1">Showing</div>
-          <div className="text-3xl font-bold text-green-600">{nodes.length}</div>
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+          <div className="text-sm text-gray-400 mb-1">Showing</div>
+          <div className="text-3xl font-bold text-green-400">{nodes.length}</div>
         </div>
       </div>
 
       {/* Filter Controls */}
-      <div className="card p-5">
+      <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
               checked={filterCritical}
               onChange={(e) => setFilterCritical(e.target.checked)}
-              className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+              className="w-4 h-4 bg-white/5 border-white/10 rounded focus:ring-2 focus:ring-blue-500"
             />
-            <span className="text-sm text-gray-700">Show only critical files (≥3 deps)</span>
+            <span className="text-sm text-gray-300">Show only critical files (≥3 deps)</span>
           </label>
           
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-700">Min dependencies:</label>
+            <label className="text-sm text-gray-300">Min dependencies:</label>
             <input
               type="range"
               min="0"
               max="10"
               value={minDeps}
               onChange={(e) => setMinDeps(Number(e.target.value))}
-              className="w-32"
+              className="w-32 accent-blue-500"
             />
-            <span className="text-sm font-mono text-gray-900">{minDeps}</span>
+            <span className="text-sm font-mono text-white">{minDeps}</span>
           </div>
 
           {highlightedNode && (
             <button
               onClick={resetHighlight}
-              className="text-sm px-3 py-1.5 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200"
+              className="text-sm px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 border border-red-500/20 transition-colors"
             >
               Clear highlight
             </button>
@@ -302,15 +300,15 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
 
       {/* Most Critical Files */}
       {metrics?.most_critical_files && metrics.most_critical_files.length > 0 && (
-        <div className="card p-5">
-          <h3 className="text-sm font-semibold mb-3 text-gray-900">Most Critical Files</h3>
+        <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+          <h3 className="text-sm font-semibold mb-3 text-white">Most Critical Files</h3>
           <div className="space-y-2">
             {metrics.most_critical_files.slice(0, 5).map((item: any, idx: number) => (
               <div key={idx} className="flex items-center justify-between text-sm">
-                <span className="font-mono text-gray-700 truncate flex-1">
+                <span className="font-mono text-gray-300 truncate flex-1">
                   {item.file.split('/').slice(-2).join('/')}
                 </span>
-                <span className="badge-danger ml-2">
+                <span className="ml-2 px-2 py-0.5 text-xs bg-red-500/10 text-red-400 border border-red-500/20 rounded">
                   {item.dependents} dependents
                 </span>
               </div>
@@ -320,7 +318,7 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
       )}
 
       {/* Graph Visualization */}
-      <div className="card p-0 overflow-hidden" style={{ height: '700px' }}>
+      <div className="bg-[#0a0a0c] border border-white/5 rounded-xl overflow-hidden" style={{ height: '700px' }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -333,39 +331,41 @@ export function DependencyGraph({ repoId, apiUrl, apiKey }: DependencyGraphProps
           minZoom={0.1}
           maxZoom={2}
         >
-          <Background />
-          <Controls />
+          <Background color="#1f1f23" gap={16} />
+          <Controls className="!bg-[#111113] !border-white/10 !rounded-lg [&>button]:!bg-[#111113] [&>button]:!border-white/10 [&>button]:!text-gray-400 [&>button:hover]:!bg-white/10" />
           <MiniMap 
             nodeColor={(node) => {
               const style = node.style as any
               return style?.background || '#6b7280'
             }}
-            maskColor="rgba(0, 0, 0, 0.1)"
+            maskColor="rgba(0, 0, 0, 0.5)"
+            className="!bg-[#111113] !border-white/10"
           />
         </ReactFlow>
       </div>
 
-      <div className="card p-5">
-        <h3 className="text-sm font-semibold mb-3 text-gray-900">Graph Legend</h3>
+      {/* Legend */}
+      <div className="bg-[#0a0a0c] border border-white/5 rounded-xl p-5">
+        <h3 className="text-sm font-semibold mb-3 text-white">Graph Legend</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded" style={{ background: '#3776ab' }} />
-            <span className="text-gray-600">Python</span>
+            <span className="text-gray-400">Python</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded" style={{ background: '#3178c6' }} />
-            <span className="text-gray-600">TypeScript</span>
+            <span className="text-gray-400">TypeScript</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded" style={{ background: '#f7df1e' }} />
-            <span className="text-gray-600">JavaScript</span>
+            <span className="text-gray-400">JavaScript</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-1 h-4 bg-blue-600" />
-            <span className="text-gray-600">Dependency</span>
+            <div className="w-1 h-4 bg-blue-500" />
+            <span className="text-gray-400">Dependency</span>
           </div>
         </div>
-        <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
+        <div className="mt-3 pt-3 border-t border-white/5 text-xs text-gray-500">
           💡 Click any node to highlight its dependencies • Drag to pan • Scroll to zoom
         </div>
       </div>
