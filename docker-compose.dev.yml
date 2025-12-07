@@ -1,21 +1,27 @@
-# Development version with hot reload
-# Usage: docker compose -f docker-compose.dev.yml up
-
 services:
+  # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: codeintel-redis-dev
+    container_name: codeintel-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     networks:
       - codeintel-network
 
+  # Backend API (with hot reload)
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: codeintel-backend-dev
+    container_name: codeintel-backend
     ports:
       - "8000:8000"
     environment:
@@ -26,14 +32,36 @@ services:
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - API_KEY=${API_KEY}
       - BACKEND_API_URL=http://backend:8000
     volumes:
-      - ./backend:/app  # Mount entire backend for hot reload
-      - backend-venv:/app/venv  # Cache venv
+      - ./backend:/app
+      - ./backend/repos:/app/repos
     depends_on:
-      - redis
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload  # Hot reload enabled
+      redis:
+        condition: service_healthy
+    networks:
+      - codeintel-network
+    restart: unless-stopped
+
+  # Frontend DEV (Vite dev server with hot reload)
+  frontend:
+    image: node:20-alpine
+    container_name: codeintel-frontend-dev
+    working_dir: /app
+    ports:
+      - "3000:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_KEY}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # Anonymous volume to prevent overwriting node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
     networks:
       - codeintel-network
 
@@ -42,4 +70,5 @@ networks:
     driver: bridge
 
 volumes:
-  backend-venv:
+  redis_data:
+    driver: local
