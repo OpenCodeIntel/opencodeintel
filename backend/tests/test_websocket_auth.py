@@ -23,7 +23,7 @@ class TestWebSocketAuthentication:
     
     def test_websocket_rejects_nonexistent_repo(self, client):
         """WebSocket should reject if repo doesn't exist (4004)"""
-        with patch('main.authenticate_websocket') as mock_auth:
+        with patch('routes.repos._authenticate_websocket') as mock_auth:
             mock_auth.return_value = {"user_id": "test-user", "email": "test@example.com"}
             
             with pytest.raises(Exception):
@@ -32,18 +32,18 @@ class TestWebSocketAuthentication:
 
 
 class TestAuthenticateWebsocketFunction:
-    """Unit tests for the authenticate_websocket helper"""
+    """Unit tests for the _authenticate_websocket helper"""
     
     @pytest.mark.asyncio
     async def test_returns_none_without_token(self):
         """Should return None and close connection if no token provided"""
-        from main import authenticate_websocket
+        from routes.repos import _authenticate_websocket
         
         mock_ws = MagicMock()
         mock_ws.query_params = {}
         mock_ws.close = AsyncMock()
         
-        result = await authenticate_websocket(mock_ws)
+        result = await _authenticate_websocket(mock_ws)
         
         assert result is None
         mock_ws.close.assert_called_once_with(code=4001, reason="Missing authentication token")
@@ -51,7 +51,7 @@ class TestAuthenticateWebsocketFunction:
     @pytest.mark.asyncio
     async def test_returns_none_with_invalid_token(self):
         """Should return None and close connection if token is invalid"""
-        from main import authenticate_websocket
+        from routes.repos import _authenticate_websocket
         
         mock_ws = MagicMock()
         mock_ws.query_params = {"token": "invalid-token"}
@@ -62,7 +62,7 @@ class TestAuthenticateWebsocketFunction:
             mock_service.verify_jwt.side_effect = Exception("Invalid token")
             mock_get_service.return_value = mock_service
             
-            result = await authenticate_websocket(mock_ws)
+            result = await _authenticate_websocket(mock_ws)
         
         assert result is None
         mock_ws.close.assert_called_once_with(code=4001, reason="Invalid or expired token")
@@ -70,7 +70,7 @@ class TestAuthenticateWebsocketFunction:
     @pytest.mark.asyncio
     async def test_returns_user_with_valid_token(self):
         """Should return user dict if token is valid"""
-        from main import authenticate_websocket
+        from routes.repos import _authenticate_websocket
         
         mock_ws = MagicMock()
         mock_ws.query_params = {"token": "valid-jwt-token"}
@@ -83,7 +83,7 @@ class TestAuthenticateWebsocketFunction:
             mock_service.verify_jwt.return_value = expected_user
             mock_get_service.return_value = mock_service
             
-            result = await authenticate_websocket(mock_ws)
+            result = await _authenticate_websocket(mock_ws)
         
         assert result == expected_user
         mock_ws.close.assert_not_called()
