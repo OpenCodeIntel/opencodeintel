@@ -17,7 +17,7 @@ export function PerformanceDashboard({ apiUrl, apiKey }: PerformanceProps) {
 
   const loadMetrics = async () => {
     try {
-      const response = await fetch(`${apiUrl}/api/metrics`, {
+      const response = await fetch(`${apiUrl}/metrics`, {
         headers: { 'Authorization': `Bearer ${apiKey}` }
       })
       const result = await response.json()

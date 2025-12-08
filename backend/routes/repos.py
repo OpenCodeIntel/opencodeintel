@@ -13,7 +13,7 @@ from dependencies import (
 from services.input_validator import InputValidator
 from middleware.auth import require_auth, AuthContext
 
-router = APIRouter(prefix="/api/repos", tags=["Repositories"])
+router = APIRouter(prefix="/repos", tags=["Repositories"])
 
 
 class AddRepoRequest(BaseModel):

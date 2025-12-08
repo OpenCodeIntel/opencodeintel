@@ -25,7 +25,7 @@ export function SearchPanel({ repoId, apiUrl, apiKey }: SearchPanelProps) {
     const startTime = Date.now()
 
     try {
-      const response = await fetch(`${apiUrl}/api/search`, {
+      const response = await fetch(`${apiUrl}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,

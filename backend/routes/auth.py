@@ -9,7 +9,7 @@ from services.auth import get_auth_service
 from middleware.auth import get_current_user
 
 # Create router
-router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 # Request/Response Models

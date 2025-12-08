@@ -10,6 +10,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import os
 
+# Import API config (single source of truth for versioning)
+from config.api import API_PREFIX, API_VERSION
+
 # Import routers
 from routes.auth import router as auth_router
 from routes.health import router as health_router
@@ -68,17 +71,20 @@ app.add_middleware(
 
 
 # ===== ROUTERS =====
+# All API routes are prefixed with API_PREFIX (e.g., /api/v1)
+# Route files define their sub-path (e.g., /auth, /repos)
+# Final paths: /api/v1/auth, /api/v1/repos, etc.
 
-app.include_router(health_router)
-app.include_router(auth_router)
-app.include_router(playground_router)
-app.include_router(repos_router)
-app.include_router(search_router)
-app.include_router(analysis_router)
-app.include_router(api_keys_router)
+app.include_router(health_router)  # /health stays at root (no versioning needed)
+app.include_router(auth_router, prefix=API_PREFIX)
+app.include_router(playground_router, prefix=API_PREFIX)
+app.include_router(repos_router, prefix=API_PREFIX)
+app.include_router(search_router, prefix=API_PREFIX)
+app.include_router(analysis_router, prefix=API_PREFIX)
+app.include_router(api_keys_router, prefix=API_PREFIX)
 
-# WebSocket endpoint (can't be in router easily)
-app.add_api_websocket_route("/ws/index/{repo_id}", websocket_index)
+# WebSocket endpoint (versioned)
+app.add_api_websocket_route(f"{API_PREFIX}/ws/index/{{repo_id}}", websocket_index)
 
 
 # ===== ERROR HANDLERS =====

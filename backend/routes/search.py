@@ -11,7 +11,7 @@ from dependencies import (
 from services.input_validator import InputValidator
 from middleware.auth import require_auth, AuthContext
 
-router = APIRouter(prefix="/api", tags=["Search"])
+router = APIRouter(prefix="", tags=["Search"])
 
 
 class SearchRequest(BaseModel):

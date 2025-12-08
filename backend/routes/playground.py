@@ -7,7 +7,7 @@ import time as time_module
 from dependencies import indexer, cache, repo_manager
 from services.input_validator import InputValidator
 
-router = APIRouter(prefix="/api/playground", tags=["Playground"])
+router = APIRouter(prefix="/playground", tags=["Playground"])
 
 # Demo repo mapping (populated on startup)
 DEMO_REPO_IDS = {}

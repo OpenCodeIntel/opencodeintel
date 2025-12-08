@@ -49,7 +49,7 @@ export function useDependencyGraph({ repoId, apiKey, enabled = true }: UseCached
     queryKey: ['dependencies', repoId],
     queryFn: async () => {
       const data = await fetchWithAuth(
-        `${API_URL}/api/repos/${repoId}/dependencies`,
+        `${API_URL}/repos/${repoId}/dependencies`,
         apiKey
       )
       // Save to localStorage on successful fetch
@@ -77,7 +77,7 @@ export function useStyleAnalysis({ repoId, apiKey, enabled = true }: UseCachedQu
     queryKey: ['style-analysis', repoId],
     queryFn: async () => {
       const data = await fetchWithAuth(
-        `${API_URL}/api/repos/${repoId}/style-analysis`,
+        `${API_URL}/repos/${repoId}/style-analysis`,
         apiKey
       )
       saveToCache('style-analysis', repoId, data)
@@ -109,7 +109,7 @@ export function useImpactAnalysis({
     queryKey: ['impact', repoId, filePath],
     queryFn: async () => {
       const data = await fetchWithAuth(
-        `${API_URL}/api/repos/${repoId}/impact?file_path=${encodeURIComponent(filePath)}`,
+        `${API_URL}/repos/${repoId}/impact?file_path=${encodeURIComponent(filePath)}`,
         apiKey
       )
       saveToCache(cacheKey, repoId, data)

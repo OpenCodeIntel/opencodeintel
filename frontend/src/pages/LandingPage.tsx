@@ -114,7 +114,7 @@ export function LandingPage() {
   const remaining = FREE_LIMIT - searchCount
 
   useEffect(() => {
-    fetch(`${API_URL}/api/playground/repos`)
+    fetch(`${API_URL}/playground/repos`)
       .then(res => res.json())
       .then(data => {
         const available = data.repos?.filter((r: any) => r.available).map((r: any) => r.id) || []
@@ -132,7 +132,7 @@ export function LandingPage() {
     const startTime = Date.now()
 
     try {
-      const response = await fetch(`${API_URL}/api/playground/search`, {
+      const response = await fetch(`${API_URL}/playground/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, demo_repo: selectedRepo, max_results: 10 })

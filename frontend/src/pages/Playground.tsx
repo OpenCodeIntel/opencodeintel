@@ -48,7 +48,7 @@ export function Playground({ onSignupClick }: PlaygroundProps) {
     const startTime = Date.now()
 
     try {
-      const response = await fetch(`${API_URL}/api/playground/search`, {
+      const response = await fetch(`${API_URL}/playground/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

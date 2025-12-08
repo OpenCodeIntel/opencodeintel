@@ -32,7 +32,7 @@ export function ImpactAnalyzer({ repoId, apiUrl, apiKey }: ImpactAnalyzerProps) 
     setError('')
     
     try {
-      const response = await fetch(`${apiUrl}/api/repos/${repoId}/impact`, {
+      const response = await fetch(`${apiUrl}/repos/${repoId}/impact`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,

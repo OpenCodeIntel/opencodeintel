@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from dependencies import api_key_manager, rate_limiter, metrics
 from middleware.auth import require_auth, AuthContext
 
-router = APIRouter(prefix="/api", tags=["API Keys"])
+router = APIRouter(prefix="", tags=["API Keys"])
 
 
 class CreateAPIKeyRequest(BaseModel):

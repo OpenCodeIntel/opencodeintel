@@ -4,6 +4,9 @@ Tests actual API behavior with mocked dependencies
 """
 import pytest
 
+# Import API prefix from centralized config (single source of truth)
+from config.api import API_PREFIX
+
 
 class TestAPIAuthentication:
     """Test authentication and authorization"""
@@ -15,20 +18,20 @@ class TestAPIAuthentication:
     
     def test_protected_endpoint_requires_auth(self, client_no_auth):
         """Protected endpoints should require API key"""
-        response = client_no_auth.get("/api/repos")
+        response = client_no_auth.get(f"{API_PREFIX}/repos")
         assert response.status_code in [401, 403]  # Either unauthorized or forbidden
     
     def test_valid_dev_key_works(self, client_no_auth, valid_headers):
         """Valid development API key should work in debug mode"""
         # Note: This tests actual auth, requires DEBUG=true and DEV_API_KEY set
-        response = client_no_auth.get("/api/repos", headers=valid_headers)
+        response = client_no_auth.get(f"{API_PREFIX}/repos", headers=valid_headers)
         # May return 200 or 401 depending on env setup during test
         assert response.status_code in [200, 401]
     
     def test_invalid_key_rejected(self, client_no_auth):
         """Invalid API keys should be rejected"""
         response = client_no_auth.get(
-            "/api/repos",
+            f"{API_PREFIX}/repos",
             headers={"Authorization": "Bearer invalid-random-key"}
         )
         assert response.status_code in [401, 403]
@@ -41,7 +44,7 @@ class TestRepositorySecurityValidation:
         """Should block file:// URLs"""
         for url in malicious_payloads["file_urls"]:
             response = client.post(
-                "/api/repos",
+                f"{API_PREFIX}/repos",
                 headers=valid_headers,
                 json={"name": "test", "git_url": url}
             )
@@ -52,7 +55,7 @@ class TestRepositorySecurityValidation:
         """Should block localhost/private IP URLs"""
         for url in malicious_payloads["localhost_urls"]:
             response = client.post(
-                "/api/repos",
+                f"{API_PREFIX}/repos",
                 headers=valid_headers,
                 json={"name": "test", "git_url": url}
             )
@@ -65,7 +68,7 @@ class TestRepositorySecurityValidation:
         
         for name in invalid_names:
             response = client.post(
-                "/api/repos",
+                f"{API_PREFIX}/repos",
                 headers=valid_headers,
                 json={"name": name, "git_url": "https://github.com/test/repo"}
             )
@@ -79,7 +82,7 @@ class TestSearchSecurityValidation:
         """Should block SQL injection in search queries"""
         for sql_query in malicious_payloads["sql_injection"]:
             response = client.post(
-                "/api/search",
+                f"{API_PREFIX}/search",
                 headers=valid_headers,
                 json={"query": sql_query, "repo_id": "test-id"}
             )
@@ -90,7 +93,7 @@ class TestSearchSecurityValidation:
     def test_reject_empty_queries(self, client, valid_headers):
         """Should reject empty search queries"""
         response = client.post(
-            "/api/search",
+            f"{API_PREFIX}/search",
             headers=valid_headers,
             json={"query": "", "repo_id": "test-id"}
         )
@@ -100,7 +103,7 @@ class TestSearchSecurityValidation:
     def test_reject_oversized_queries(self, client, valid_headers):
         """Should reject queries over max length"""
         response = client.post(
-            "/api/search",
+            f"{API_PREFIX}/search",
             headers=valid_headers,
             json={"query": "a" * 1000, "repo_id": "test-id"}
         )
@@ -115,7 +118,7 @@ class TestImpactAnalysisSecurity:
         """Should block path traversal in impact analysis"""
         for path in malicious_payloads["path_traversal"]:
             response = client.post(
-                "/api/repos/test-id/impact",
+                f"{API_PREFIX}/repos/test-id/impact",
                 headers=valid_headers,
                 json={"repo_id": "test-id", "file_path": path}
             )
@@ -141,7 +144,7 @@ class TestCostControls:
     def test_search_results_capped(self, client, valid_headers):
         """Search results should be capped at maximum"""
         response = client.post(
-            "/api/search",
+            f"{API_PREFIX}/search",
             headers=valid_headers,
             json={
                 "query": "test query",

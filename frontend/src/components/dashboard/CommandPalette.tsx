@@ -83,7 +83,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   const fetchRepos = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/repos`, {
+      const response = await fetch(`${API_URL}/repos`, {
         headers: { 'Authorization': `Bearer ${session?.access_token}` }
       })
       const data = await response.json()

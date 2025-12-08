@@ -27,7 +27,7 @@ export function DashboardHome() {
     if (!session?.access_token) return
     
     try {
-      const response = await fetch(`${API_URL}/api/repos`, {
+      const response = await fetch(`${API_URL}/repos`, {
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       })
       const data = await response.json()
@@ -50,7 +50,7 @@ export function DashboardHome() {
       setLoading(true)
       const name = gitUrl.split('/').pop()?.replace('.git', '') || 'unknown'
       
-      const response = await fetch(`${API_URL}/api/repos`, {
+      const response = await fetch(`${API_URL}/repos`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session?.access_token}`,
@@ -61,7 +61,7 @@ export function DashboardHome() {
       
       const data = await response.json()
       
-      await fetch(`${API_URL}/api/repos/${data.repo_id}/index`, {
+      await fetch(`${API_URL}/repos/${data.repo_id}/index`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session?.access_token}` }
       })
@@ -85,7 +85,7 @@ export function DashboardHome() {
     
     try {
       setLoading(true)
-      await fetch(`${API_URL}/api/repos/${selectedRepo}/index`, {
+      await fetch(`${API_URL}/repos/${selectedRepo}/index`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session?.access_token}` }
       })

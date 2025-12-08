@@ -14,11 +14,15 @@ import mcp.server.stdio
 import mcp.types as types
 from dotenv import load_dotenv
 
+# Import API config (single source of truth for versioning)
+from config import API_PREFIX
+
 # Load environment variables
 load_dotenv()
 
 # Configuration
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
+BACKEND_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
+BACKEND_API_URL = f"{BACKEND_BASE_URL}{API_PREFIX}"  # Full versioned URL
 API_KEY = os.getenv("API_KEY", "dev-secret-key")
 
 # Create MCP server instance
@@ -138,7 +142,7 @@ async def handle_call_tool(
             
             if name == "search_code":
                 response = await client.post(
-                    f"{BACKEND_API_URL}/api/search",
+                    f"{BACKEND_API_URL}/search",
                     json=arguments,
                     headers=headers
                 )
@@ -167,7 +171,7 @@ async def handle_call_tool(
             
             elif name == "list_repositories":
                 response = await client.get(
-                    f"{BACKEND_API_URL}/api/repos",
+                    f"{BACKEND_API_URL}/repos",
                     headers=headers
                 )
                 response.raise_for_status()
@@ -188,7 +192,7 @@ async def handle_call_tool(
             
             elif name == "get_dependency_graph":
                 response = await client.get(
-                    f"{BACKEND_API_URL}/api/repos/{arguments['repo_id']}/dependencies",
+                    f"{BACKEND_API_URL}/repos/{arguments['repo_id']}/dependencies",
                     headers=headers
                 )
                 response.raise_for_status()
@@ -214,7 +218,7 @@ async def handle_call_tool(
             
             elif name == "analyze_code_style":
                 response = await client.get(
-                    f"{BACKEND_API_URL}/api/repos/{arguments['repo_id']}/style",
+                    f"{BACKEND_API_URL}/repos/{arguments['repo_id']}/style-analysis",
                     headers=headers
                 )
                 response.raise_for_status()
@@ -245,7 +249,7 @@ async def handle_call_tool(
             
             elif name == "analyze_impact":
                 response = await client.post(
-                    f"{BACKEND_API_URL}/api/repos/{arguments['repo_id']}/impact",
+                    f"{BACKEND_API_URL}/repos/{arguments['repo_id']}/impact",
                     json={"repo_id": arguments['repo_id'], "file_path": arguments['file_path']},
                     headers=headers
                 )
@@ -276,7 +280,7 @@ async def handle_call_tool(
             
             elif name == "get_repository_insights":
                 response = await client.get(
-                    f"{BACKEND_API_URL}/api/repos/{arguments['repo_id']}/insights",
+                    f"{BACKEND_API_URL}/repos/{arguments['repo_id']}/insights",
                     headers=headers
                 )
                 response.raise_for_status()
