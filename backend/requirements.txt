@@ -36,3 +36,6 @@ pyjwt>=2.8.0  # JWT token verification for Supabase Auth
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
 pytest-cov>=6.0.0
+
+# Observability
+sentry-sdk[fastapi]>=2.0.0

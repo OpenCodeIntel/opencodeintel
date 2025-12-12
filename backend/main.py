@@ -10,6 +10,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import os
 
+# Initialize Sentry FIRST (before other imports to catch all errors)
+from services.sentry import init_sentry
+init_sentry()
+
 # Import API config (single source of truth for versioning)
 from config.api import API_PREFIX, API_VERSION
 

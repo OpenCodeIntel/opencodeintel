@@ -122,11 +122,17 @@ def _authenticate(token: str) -> AuthContext:
     # Try JWT (Supabase tokens)
     ctx = _validate_jwt(token)
     if ctx:
+        # Set Sentry user context for error tracking
+        from services.sentry import set_user_context
+        set_user_context(user_id=ctx.user_id, email=ctx.email)
         return ctx
     
     # Try API key
     ctx = _validate_api_key(token)
     if ctx:
+        # Set Sentry user context for error tracking
+        from services.sentry import set_user_context
+        set_user_context(user_id=ctx.user_id or ctx.api_key_name)
         return ctx
     
     # Neither worked
