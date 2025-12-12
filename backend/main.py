@@ -112,3 +112,18 @@ async def rate_limit_handler(request: Request, exc):
         status_code=429,
         content={"detail": "Rate limit exceeded. Please try again later."}
     )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """
+    Catch-all handler for unhandled exceptions.
+    Captures to Sentry and returns 500.
+    """
+    from services.sentry import capture_http_exception
+    capture_http_exception(request, exc, 500)
+    
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )

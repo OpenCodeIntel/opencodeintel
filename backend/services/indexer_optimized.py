@@ -194,6 +194,9 @@ class OptimizedCodeIndexer:
     
     async def index_repository(self, repo_id: str, repo_path: str):
         """Index all code in a repository - OPTIMIZED VERSION"""
+        from services.sentry import set_operation_context, capture_exception
+        
+        set_operation_context("indexing", repo_id=repo_id)
         start_time = time.time()
         print(f"\n🚀 Starting optimized indexing for repo: {repo_id}")
         print(f"📂 Path: {repo_path}")
@@ -386,6 +389,8 @@ class OptimizedCodeIndexer:
             return formatted_results[:max_results]
             
         except Exception as e:
+            from services.sentry import capture_exception
+            capture_exception(e, operation="search", repo_id=repo_id, query=query[:100])
             print(f"❌ Error searching: {e}")
             return []
     
