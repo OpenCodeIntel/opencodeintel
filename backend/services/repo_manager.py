@@ -8,6 +8,7 @@ import os
 import git
 from pathlib import Path
 from services.supabase_service import get_supabase_service
+from services.observability import logger, capture_exception, metrics
 
 
 class RepositoryManager:
@@ -29,7 +30,7 @@ class RepositoryManager:
         if not self.repos_dir.exists():
             return
         
-        print("🔄 Syncing repositories...")
+        logger.info("Syncing repositories from disk")
         
         for repo_path in self.repos_dir.iterdir():
             if not repo_path.is_dir() or repo_path.name.startswith('.'):
@@ -39,7 +40,7 @@ class RepositoryManager:
                 # Check if already in DB
                 existing = self.db.get_repository(repo_path.name)
                 if existing:
-                    print(f"✅ Repo exists in DB: {existing['name']}")
+                    logger.debug("Repo exists in DB", name=existing['name'])
                     continue
                 
                 # Try to open as git repo
@@ -73,10 +74,10 @@ class RepositoryManager:
                     file_count * 20  # Estimate function count
                 )
                 
-                print(f"✅ Synced repo from disk: {name} ({repo_path.name})")
+                logger.info("Synced repo from disk", name=name, repo_id=repo_path.name)
                 
             except Exception as e:
-                print(f"⚠️  Error syncing {repo_path.name}: {e}")
+                logger.warning("Error syncing repo", repo=repo_path.name, error=str(e))
     
     def list_repos(self) -> List[dict]:
         """List all repositories from Supabase"""
@@ -106,7 +107,8 @@ class RepositoryManager:
         
         try:
             # Clone the repository
-            print(f"Cloning {git_url} to {local_path}...")
+            logger.info("Cloning repository", git_url=git_url, local_path=str(local_path))
+            metrics.increment("repos_cloned")
             git.Repo.clone_from(git_url, local_path, branch=branch, depth=1)
             
             # Create DB record with ownership

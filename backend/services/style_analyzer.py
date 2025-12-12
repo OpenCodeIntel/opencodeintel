@@ -12,6 +12,8 @@ import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
 from tree_sitter import Language, Parser
 
+from services.observability import logger
+
 
 class StyleAnalyzer:
     """Analyze code style and team patterns"""
@@ -23,7 +25,7 @@ class StyleAnalyzer:
             'javascript': Parser(Language(tsjavascript.language())),
             'typescript': Parser(Language(tsjavascript.language())),
         }
-        print("✅ StyleAnalyzer initialized!")
+        logger.debug("StyleAnalyzer initialized")
     
     def _detect_language(self, file_path: str) -> str:
         """Detect language from extension"""
@@ -141,7 +143,7 @@ class StyleAnalyzer:
         """Analyze coding style patterns across repository"""
         repo_path = Path(repo_path)
         
-        print(f"🎨 Analyzing code style for repository...")
+        logger.info("Analyzing code style for repository")
         
         # Discover code files
         code_files = []
@@ -197,7 +199,7 @@ class StyleAnalyzer:
                 language_dist[language] += 1
                 
             except Exception as e:
-                print(f"Error analyzing {file_path}: {e}")
+                logger.warning("Error analyzing file", file_path=str(file_path), error=str(e))
                 continue
         
         # Analyze naming conventions
@@ -212,10 +214,10 @@ class StyleAnalyzer:
         total_functions = len(function_names)
         total_classes = len(class_names)
         
-        print(f"✅ Style analysis complete!")
-        print(f"   • {total_files} files analyzed")
-        print(f"   • {total_functions} functions found")
-        print(f"   • {total_classes} classes found")
+        logger.info("Style analysis complete", 
+                    files_analyzed=total_files, 
+                    functions_found=total_functions, 
+                    classes_found=total_classes)
         
         return {
             "summary": {
@@ -281,7 +283,7 @@ class StyleAnalyzer:
             
             db.upsert_code_style(repo_id, language, analysis)
         
-        print(f"✅ Cached code style analysis for {repo_id} in Supabase")
+        logger.debug("Cached code style analysis in Supabase", repo_id=repo_id)
     
     def load_from_cache(self, repo_id: str) -> Dict:
         """Load style analysis from Supabase cache"""
@@ -314,7 +316,7 @@ class StyleAnalyzer:
             if style.get("patterns"):
                 patterns = style["patterns"]
         
-        print(f"✅ Loaded cached code style for {repo_id} from Supabase")
+        logger.debug("Loaded cached code style from Supabase", repo_id=repo_id)
         
         return {
             "languages": languages,

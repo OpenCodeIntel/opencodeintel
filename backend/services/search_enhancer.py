@@ -8,6 +8,8 @@ from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 import os
 
+from services.observability import logger, capture_exception
+
 
 class SearchEnhancer:
     """Enhances search quality through various techniques"""
@@ -56,7 +58,8 @@ Output: authentication auth login verify user token jwt session authenticate val
             return f"{query} {expanded}"
             
         except Exception as e:
-            print(f"⚠️ Query expansion failed: {e}")
+            logger.warning("Query expansion failed", error=str(e), query=query[:50])
+            capture_exception(e, operation="query_expansion", query=query[:50])
             return query
     
     def extract_docstring(self, code: str, language: str) -> str:

@@ -8,6 +8,7 @@ from dependencies import (
 )
 from services.input_validator import InputValidator
 from middleware.auth import require_auth, AuthContext
+from services.observability import logger, metrics
 
 router = APIRouter(prefix="/repos", tags=["Analysis"])
 
@@ -29,11 +30,11 @@ async def get_dependency_graph(
         # Try cache first
         cached_graph = dependency_analyzer.load_from_cache(repo_id)
         if cached_graph:
-            print(f"✅ Using cached dependency graph for {repo_id}")
+            logger.debug("Using cached dependency graph", repo_id=repo_id)
             return {**cached_graph, "cached": True}
         
         # Build fresh
-        print(f"🔄 Building fresh dependency graph for {repo_id}")
+        logger.info("Building fresh dependency graph", repo_id=repo_id)
         graph_data = dependency_analyzer.build_dependency_graph(repo["local_path"])
         dependency_analyzer.save_to_cache(repo_id, graph_data)
         
@@ -62,7 +63,7 @@ async def analyze_impact(
         # Get or build graph
         graph_data = dependency_analyzer.load_from_cache(repo_id)
         if not graph_data:
-            print(f"🔄 Building dependency graph for impact analysis")
+            logger.info("Building dependency graph for impact analysis", repo_id=repo_id)
             graph_data = dependency_analyzer.build_dependency_graph(repo["local_path"])
             dependency_analyzer.save_to_cache(repo_id, graph_data)
         
@@ -89,7 +90,7 @@ async def get_repository_insights(
         # Get or build graph
         graph_data = dependency_analyzer.load_from_cache(repo_id)
         if not graph_data:
-            print(f"🔄 Building dependency graph for insights")
+            logger.info("Building dependency graph for insights", repo_id=repo_id)
             graph_data = dependency_analyzer.build_dependency_graph(repo["local_path"])
             dependency_analyzer.save_to_cache(repo_id, graph_data)
         
@@ -121,11 +122,11 @@ async def get_style_analysis(
         # Try cache first
         cached_style = style_analyzer.load_from_cache(repo_id)
         if cached_style:
-            print(f"✅ Using cached code style for {repo_id}")
+            logger.debug("Using cached code style", repo_id=repo_id)
             return {**cached_style, "cached": True}
         
         # Analyze fresh
-        print(f"🔄 Analyzing code style for {repo_id}")
+        logger.info("Analyzing code style", repo_id=repo_id)
         style_data = style_analyzer.analyze_repository_style(repo["local_path"])
         style_analyzer.save_to_cache(repo_id, style_data)
         

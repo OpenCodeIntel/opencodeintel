@@ -9,6 +9,8 @@ from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 import uuid
 
+from services.observability import logger
+
 load_dotenv()
 
 
@@ -29,7 +31,7 @@ class SupabaseService:
             persist_session=False
         )
         self.client: Client = create_client(supabase_url, supabase_key, options)
-        print("✅ Supabase service initialized!")
+        logger.info("Supabase service initialized")
     
     # ===== REPOSITORIES =====
     
@@ -120,17 +122,16 @@ class SupabaseService:
         for dep in dependencies:
             dep["repo_id"] = repo_id
         
-        # Upsert with explicit conflict resolution
         result = self.client.table("file_dependencies").upsert(
             dependencies,
             on_conflict="repo_id,file_path"
         ).execute()
-        print(f"💾 Upserted {len(result.data) if result.data else 0} file dependencies")
+        logger.debug("Upserted file dependencies", count=len(result.data) if result.data else 0)
     
     def get_file_dependencies(self, repo_id: str) -> List[Dict]:
         """Get all file dependencies for a repo"""
         result = self.client.table("file_dependencies").select("*").eq("repo_id", repo_id).execute()
-        print(f"🔍 Query file_dependencies for {repo_id}: found {len(result.data) if result.data else 0} rows")
+        logger.debug("Queried file dependencies", repo_id=repo_id, count=len(result.data) if result.data else 0)
         return result.data or []
     
     def get_file_impact(self, repo_id: str, file_path: str) -> Optional[Dict]:

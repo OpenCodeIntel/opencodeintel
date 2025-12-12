@@ -7,6 +7,8 @@ from datetime import datetime
 from collections import deque
 import time
 
+from services.observability import logger
+
 
 class PerformanceMetrics:
     """Track performance metrics for monitoring"""
@@ -19,7 +21,7 @@ class PerformanceMetrics:
         self.cache_misses = 0
         self.total_searches = 0
         
-        print("✅ PerformanceMetrics initialized!")
+        logger.debug("PerformanceMetrics initialized")
     
     def record_indexing(self, repo_id: str, duration: float, function_count: int):
         """Record indexing performance"""
