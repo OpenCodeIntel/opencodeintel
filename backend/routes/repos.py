@@ -12,6 +12,7 @@ from dependencies import (
 )
 from services.input_validator import InputValidator
 from middleware.auth import require_auth, AuthContext
+from services.observability import logger, capture_exception
 
 router = APIRouter(prefix="/repos", tags=["Repositories"])
 
@@ -100,7 +101,7 @@ async def index_repository(
         last_commit = repo_manager.get_last_indexed_commit(repo_id)
         
         if incremental and last_commit:
-            print(f"🔄 Using INCREMENTAL indexing (last: {last_commit[:8]})")
+            logger.info("Using INCREMENTAL indexing", repo_id=repo_id, last_commit=last_commit[:8])
             total_functions = await indexer.incremental_index_repository(
                 repo_id,
                 repo["local_path"],
@@ -108,7 +109,7 @@ async def index_repository(
             )
             index_type = "incremental"
         else:
-            print(f"📦 Using FULL indexing")
+            logger.info("Using FULL indexing", repo_id=repo_id)
             total_functions = await indexer.index_repository(repo_id, repo["local_path"])
             index_type = "full"
         
@@ -204,8 +205,10 @@ async def websocket_index(websocket: WebSocket, repo_id: str):
             pass
         
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for repo {repo_id}")
+        logger.debug("WebSocket disconnected", repo_id=repo_id)
     except Exception as e:
+        logger.error("WebSocket indexing error", repo_id=repo_id, error=str(e))
+        capture_exception(e, operation="websocket_indexing", repo_id=repo_id)
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:

@@ -6,6 +6,7 @@ import time as time_module
 
 from dependencies import indexer, cache, repo_manager
 from services.input_validator import InputValidator
+from services.observability import logger
 
 router = APIRouter(prefix="/playground", tags=["Playground"])
 
@@ -39,9 +40,9 @@ async def load_demo_repos():
                 DEMO_REPO_IDS["express"] = repo["id"]
             elif "react" in name_lower:
                 DEMO_REPO_IDS["react"] = repo["id"]
-        print(f"📦 Loaded demo repos: {list(DEMO_REPO_IDS.keys())}")
+        logger.info("Loaded demo repos", repos=list(DEMO_REPO_IDS.keys()))
     except Exception as e:
-        print(f"⚠️ Could not load demo repos: {e}")
+        logger.warning("Could not load demo repos", error=str(e))
 
 
 def _check_rate_limit(ip: str) -> tuple[bool, int]:
