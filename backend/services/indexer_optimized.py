@@ -31,6 +31,9 @@ import time
 # Search enhancement
 from services.search_enhancer import SearchEnhancer
 
+# Observability
+from services.observability import logger, trace_operation, track_time, capture_exception, add_breadcrumb, metrics
+
 load_dotenv()
 
 # Configuration
@@ -64,9 +67,9 @@ class OptimizedCodeIndexer:
         if index_name in existing_indexes:
             # Use existing index (dimension already set)
             index_info = pc.describe_index(index_name)
-            print(f"📊 Using existing Pinecone index: {index_name} (dim={index_info.dimension})")
+            logger.info("Using existing Pinecone index", index=index_name, dimension=index_info.dimension)
         else:
-            print(f"Creating Pinecone index: {index_name} with dimension {EMBEDDING_DIMENSIONS}")
+            logger.info("Creating Pinecone index", index=index_name, dimension=EMBEDDING_DIMENSIONS)
             pc.create_index(
                 name=index_name,
                 dimension=EMBEDDING_DIMENSIONS,
@@ -86,7 +89,7 @@ class OptimizedCodeIndexer:
             'typescript': self._create_parser(Language(tsjavascript.language())),
         }
         
-        print(f"✅ OptimizedCodeIndexer initialized! (model: {EMBEDDING_MODEL})")
+        logger.info("OptimizedCodeIndexer initialized", model=EMBEDDING_MODEL)
     
     def _create_parser(self, language) -> Parser:
         """Create a tree-sitter parser"""
@@ -149,7 +152,8 @@ class OptimizedCodeIndexer:
             return [item.embedding for item in response.data]
             
         except Exception as e:
-            print(f"❌ Error creating batch embeddings: {e}")
+            logger.error("Error creating batch embeddings", error=str(e), batch_size=len(texts))
+            capture_exception(e, operation="create_embeddings", batch_size=len(texts))
             # Return zero vectors on error
             return [[0.0] * EMBEDDING_DIMENSIONS for _ in texts]
     
@@ -194,25 +198,26 @@ class OptimizedCodeIndexer:
     
     async def index_repository(self, repo_id: str, repo_path: str):
         """Index all code in a repository - OPTIMIZED VERSION"""
-        from services.sentry import set_operation_context, capture_exception
+        from services.observability import set_operation_context
         
         set_operation_context("indexing", repo_id=repo_id)
+        add_breadcrumb("Starting repository indexing", category="indexing", repo_id=repo_id)
+        
         start_time = time.time()
-        print(f"\n🚀 Starting optimized indexing for repo: {repo_id}")
-        print(f"📂 Path: {repo_path}")
+        logger.info("Starting optimized indexing", repo_id=repo_id, path=repo_path)
         
         # Discover code files
         code_files = self._discover_code_files(repo_path)
-        print(f"📄 Found {len(code_files)} code files")
+        logger.info("Code files discovered", repo_id=repo_id, file_count=len(code_files))
         
         if not code_files:
-            print("⚠️  No code files found")
+            logger.warning("No code files found", repo_id=repo_id)
             return 0
         
         # Extract all functions from all files (parallel)
         all_functions_data = []
         
-        print(f"\n🔍 Extracting functions from files...")
+        add_breadcrumb("Extracting functions", category="indexing", file_count=len(code_files))
         for i in range(0, len(code_files), self.FILE_BATCH_SIZE):
             batch = code_files[i:i + self.FILE_BATCH_SIZE]
             
@@ -228,18 +233,18 @@ class OptimizedCodeIndexer:
                 if isinstance(result, list):
                     all_functions_data.extend(result)
             
-            print(f"   Processed {min(i + self.FILE_BATCH_SIZE, len(code_files))}/{len(code_files)} files, "
-                  f"{len(all_functions_data)} functions extracted")
+            processed = min(i + self.FILE_BATCH_SIZE, len(code_files))
+            logger.debug("File batch processed", processed=processed, total=len(code_files), functions=len(all_functions_data))
         
         if not all_functions_data:
-            print("⚠️  No functions extracted")
+            logger.warning("No functions extracted", repo_id=repo_id)
             return 0
         
-        print(f"\n✅ Total functions extracted: {len(all_functions_data)}")
+        logger.info("Functions extracted", repo_id=repo_id, count=len(all_functions_data))
+        add_breadcrumb("Functions extracted", category="indexing", count=len(all_functions_data))
         
         # Generate embeddings in BATCHES (this is the key optimization)
-        print(f"\n🧠 Generating embeddings in batches of {self.EMBEDDING_BATCH_SIZE}...")
-        print(f"   Using model: {EMBEDDING_MODEL}")
+        logger.info("Generating embeddings", batch_size=self.EMBEDDING_BATCH_SIZE, model=EMBEDDING_MODEL)
         
         # Create rich embedding texts using search enhancer
         embedding_texts = [
@@ -248,15 +253,16 @@ class OptimizedCodeIndexer:
         ]
         
         all_embeddings = []
-        for i in range(0, len(embedding_texts), self.EMBEDDING_BATCH_SIZE):
-            batch_texts = embedding_texts[i:i + self.EMBEDDING_BATCH_SIZE]
-            batch_embeddings = await self._create_embeddings_batch(batch_texts)
-            all_embeddings.extend(batch_embeddings)
-            
-            print(f"   Generated {len(all_embeddings)}/{len(embedding_texts)} embeddings")
+        with track_time("embedding_generation", repo_id=repo_id, total=len(embedding_texts)):
+            for i in range(0, len(embedding_texts), self.EMBEDDING_BATCH_SIZE):
+                batch_texts = embedding_texts[i:i + self.EMBEDDING_BATCH_SIZE]
+                batch_embeddings = await self._create_embeddings_batch(batch_texts)
+                all_embeddings.extend(batch_embeddings)
+                
+                logger.debug("Embeddings generated", progress=len(all_embeddings), total=len(embedding_texts))
         
         # Prepare vectors for Pinecone
-        print(f"\n💾 Preparing vectors for Pinecone...")
+        add_breadcrumb("Uploading to Pinecone", category="indexing", vector_count=len(all_functions_data))
         vectors_to_upsert = []
         
         for func_data, embedding in zip(all_functions_data, all_embeddings):
@@ -280,17 +286,24 @@ class OptimizedCodeIndexer:
             })
         
         # Upsert to Pinecone in batches
-        print(f"\n☁️  Uploading to Pinecone in batches of {self.PINECONE_UPSERT_BATCH}...")
-        for i in range(0, len(vectors_to_upsert), self.PINECONE_UPSERT_BATCH):
-            batch = vectors_to_upsert[i:i + self.PINECONE_UPSERT_BATCH]
-            self.index.upsert(vectors=batch)
-            print(f"   Uploaded {min(i + self.PINECONE_UPSERT_BATCH, len(vectors_to_upsert))}/{len(vectors_to_upsert)} vectors")
+        with track_time("pinecone_upload", repo_id=repo_id, vectors=len(vectors_to_upsert)):
+            for i in range(0, len(vectors_to_upsert), self.PINECONE_UPSERT_BATCH):
+                batch = vectors_to_upsert[i:i + self.PINECONE_UPSERT_BATCH]
+                self.index.upsert(vectors=batch)
+                logger.debug("Vectors uploaded", progress=min(i + self.PINECONE_UPSERT_BATCH, len(vectors_to_upsert)), total=len(vectors_to_upsert))
         
         elapsed = time.time() - start_time
-        print(f"\n✅ Indexing complete!")
-        print(f"   • Total functions: {len(all_functions_data)}")
-        print(f"   • Time taken: {elapsed:.2f}s")
-        print(f"   • Speed: {len(all_functions_data)/elapsed:.1f} functions/sec")
+        speed = len(all_functions_data) / elapsed if elapsed > 0 else 0
+        
+        logger.info(
+            "Indexing complete",
+            repo_id=repo_id,
+            functions=len(all_functions_data),
+            duration_s=round(elapsed, 2),
+            speed=round(speed, 1)
+        )
+        metrics.increment("indexing_completed")
+        metrics.timing("indexing_duration_s", elapsed)
         
         return len(all_functions_data)
     
@@ -324,7 +337,7 @@ class OptimizedCodeIndexer:
             return functions
             
         except Exception as e:
-            print(f"❌ Error processing {file_path}: {e}")
+            logger.error("Error processing file", file_path=file_path, error=str(e))
             return []
     
     async def semantic_search(
@@ -345,12 +358,15 @@ class OptimizedCodeIndexer:
             use_query_expansion: Expand query with related terms
             use_reranking: Rerank results with keyword boosting
         """
+        start_time = time.time()
+        metrics.increment("search_requests")
+        
         try:
             # Step 1: Query expansion (adds related programming terms)
             search_query = query
             if use_query_expansion:
                 search_query = await self.search_enhancer.expand_query(query)
-                print(f"🔍 Expanded query: {search_query[:100]}...")
+                logger.debug("Query expanded", original=query[:50], expanded=search_query[:100])
             
             # Step 2: Generate query embedding
             query_embeddings = await self._create_embeddings_batch([search_query])
@@ -386,12 +402,16 @@ class OptimizedCodeIndexer:
                     formatted_results
                 )
             
+            elapsed = time.time() - start_time
+            logger.info("Search completed", repo_id=repo_id, results=len(formatted_results), duration_ms=round(elapsed*1000, 2))
+            metrics.timing("search_latency_ms", elapsed * 1000)
+            
             return formatted_results[:max_results]
             
         except Exception as e:
-            from services.sentry import capture_exception
             capture_exception(e, operation="search", repo_id=repo_id, query=query[:100])
-            print(f"❌ Error searching: {e}")
+            logger.error("Search failed", repo_id=repo_id, error=str(e))
+            metrics.increment("search_errors")
             return []
     
     async def explain_code(
@@ -439,7 +459,8 @@ class OptimizedCodeIndexer:
             return response.choices[0].message.content
             
         except Exception as e:
-            print(f"❌ Error explaining code: {e}")
+            logger.error("Error explaining code", file_path=file_path, error=str(e))
+            capture_exception(e, operation="explain_code", file_path=file_path)
             return f"Error: {str(e)}"
 
     async def index_repository_with_progress(
