@@ -11,6 +11,8 @@ import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
 from tree_sitter import Language, Parser
 
+from services.observability import logger, capture_exception, track_time, metrics
+
 
 class DependencyAnalyzer:
     """Analyze code dependencies and build dependency graph"""
@@ -22,7 +24,7 @@ class DependencyAnalyzer:
             'javascript': Parser(Language(tsjavascript.language())),
             'typescript': Parser(Language(tsjavascript.language())),
         }
-        print("✅ DependencyAnalyzer initialized!")
+        logger.info("DependencyAnalyzer initialized")
     
     def _detect_language(self, file_path: str) -> str:
         """Detect language from file extension"""
@@ -117,7 +119,7 @@ class DependencyAnalyzer:
             }
             
         except Exception as e:
-            print(f"Error analyzing {file_path}: {e}")
+            logger.error("Error analyzing file", file_path=file_path, error=str(e))
             return {"file": str(file_path), "imports": [], "language": language, "error": str(e)}
     
     def build_dependency_graph(self, repo_path: str) -> Dict:
@@ -137,7 +139,7 @@ class DependencyAnalyzer:
             if file_path.suffix in extensions:
                 code_files.append(file_path)
         
-        print(f"📊 Building dependency graph for {len(code_files)} files...")
+        logger.info("Building dependency graph", file_count=len(code_files))
         
         # Analyze each file
         file_dependencies = {}
@@ -157,12 +159,12 @@ class DependencyAnalyzer:
         
         # DEBUG: Show sample of what we're working with
         sample_files = list(internal_files)[:3]
-        print(f"📁 Sample internal files: {sample_files}")
+        logger.debug("Sample internal files", sample=sample_files)
         
         # Find a file with imports to debug
         for f, imports in list(file_dependencies.items())[:5]:
             if imports:
-                print(f"📄 {f} imports: {imports[:3]}")
+                logger.debug("Sample file imports", file=f, imports=imports[:3])
                 break
         
         # Create nodes
@@ -198,12 +200,13 @@ class DependencyAnalyzer:
                 else:
                     failed_count += 1
         
-        print(f"🔗 Resolved {resolved_count} internal imports, {failed_count} external")
+        logger.info("Import resolution complete", resolved=resolved_count, external=failed_count)
         
         # Calculate metrics
         graph_metrics = self._calculate_graph_metrics(file_dependencies, edges)
         
-        print(f"✅ Graph built: {len(nodes)} nodes, {len(edges)} edges")
+        logger.info("Dependency graph built", nodes=len(nodes), edges=len(edges))
+        metrics.increment("dependency_graphs_built")
         
         return {
             "nodes": nodes,
@@ -440,7 +443,7 @@ class DependencyAnalyzer:
         db.clear_file_dependencies(repo_id)
         
         # Bulk insert new dependencies
-        print(f"💾 Saving {len(file_deps)} file dependencies to Supabase")
+        logger.info("Saving file dependencies to Supabase", repo_id=repo_id, count=len(file_deps))
         db.upsert_file_dependencies(repo_id, file_deps)
         
         # Save repository insights
@@ -457,7 +460,7 @@ class DependencyAnalyzer:
         }
         
         db.upsert_repository_insights(repo_id, insights)
-        print(f"✅ Cached dependency graph for {repo_id} in Supabase")
+        logger.info("Cached dependency graph in Supabase", repo_id=repo_id)
     
     def load_from_cache(self, repo_id: str) -> Dict:
         """Load dependency graph from Supabase cache"""
@@ -467,7 +470,7 @@ class DependencyAnalyzer:
         
         # Get file dependencies
         file_deps = db.get_file_dependencies(repo_id)
-        print(f"🔍 Loading cache for {repo_id}: found {len(file_deps) if file_deps else 0} file dependencies")
+        logger.debug("Loading cache", repo_id=repo_id, found=len(file_deps) if file_deps else 0)
         
         if not file_deps:
             return None
@@ -492,7 +495,7 @@ class DependencyAnalyzer:
             "total_edges": len(edges)
         }
         
-        print(f"✅ Loaded cached dependency graph for {repo_id} from Supabase")
+        logger.info("Loaded cached dependency graph", repo_id=repo_id)
         
         return {
             "dependencies": dependencies,
