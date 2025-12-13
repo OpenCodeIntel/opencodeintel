@@ -18,6 +18,7 @@ from services.rate_limiter import RateLimiter, APIKeyManager
 from services.supabase_service import get_supabase_service
 from services.input_validator import InputValidator, CostController
 from services.user_limits import init_user_limits_service, get_user_limits_service
+from services.repo_validator import get_repo_validator
 
 # Service instances (singleton pattern)
 indexer = OptimizedCodeIndexer()
@@ -37,6 +38,9 @@ user_limits = init_user_limits_service(
     supabase_client=get_supabase_service().client,
     redis_client=cache.redis if cache.redis else None
 )
+
+# Repository size validation
+repo_validator = get_repo_validator()
 
 
 def get_repo_or_404(repo_id: str, user_id: str) -> dict:

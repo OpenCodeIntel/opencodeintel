@@ -8,7 +8,7 @@ import git
 
 from dependencies import (
     indexer, repo_manager, metrics,
-    get_repo_or_404, cost_controller
+    get_repo_or_404, user_limits, repo_validator
 )
 from services.input_validator import InputValidator
 from middleware.auth import require_auth, AuthContext
@@ -38,8 +38,12 @@ async def add_repository(
     request: AddRepoRequest,
     auth: AuthContext = Depends(require_auth)
 ):
-    """Add a new repository with validation and cost controls."""
+    """Add a new repository with validation and tier-based limits."""
     user_id = auth.user_id or auth.identifier
+    
+    # Validate user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
     
     # Validate inputs
     valid_name, name_error = InputValidator.validate_repo_name(request.name)
@@ -50,13 +54,17 @@ async def add_repository(
     if not valid_url:
         raise HTTPException(status_code=400, detail=f"Invalid Git URL: {url_error}")
     
-    # Check repo limit
-    user_id_hash = hashlib.sha256(user_id.encode()).hexdigest()
-    can_add, limit_error = cost_controller.check_repo_limit(user_id, user_id_hash)
-    if not can_add:
-        raise HTTPException(status_code=429, detail=limit_error)
+    # Check repo count limit (tier-aware) - #95
+    repo_count_check = user_limits.check_repo_count(user_id)
+    if not repo_count_check.allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=repo_count_check.to_dict()
+        )
     
     try:
+        # Clone repo first
+        user_id_hash = hashlib.sha256(user_id.encode()).hexdigest()
         repo = repo_manager.add_repo(
             name=request.name,
             git_url=request.git_url,
@@ -65,22 +73,60 @@ async def add_repository(
             api_key_hash=user_id_hash
         )
         
-        # Check repo size
-        can_index, size_error = cost_controller.check_repo_size_limit(repo["local_path"])
-        if not can_index:
+        # Analyze repo size - #94
+        analysis = repo_validator.analyze_repo(repo["local_path"])
+        
+        # Fail CLOSED if analysis failed (security: don't allow unknown-size repos)
+        if not analysis.success:
+            logger.error(
+                "Repo analysis failed - blocking indexing",
+                user_id=user_id,
+                repo_id=repo["id"],
+                error=analysis.error
+            )
             return {
                 "repo_id": repo["id"],
                 "status": "added",
-                "warning": size_error,
-                "message": "Repository added but too large for automatic indexing"
+                "indexing_blocked": True,
+                "analysis": analysis.to_dict(),
+                "message": f"Repository added but analysis failed: {analysis.error}. Please try re-indexing later."
+            }
+        
+        # Check repo size against tier limits
+        size_check = user_limits.check_repo_size(
+            user_id,
+            analysis.file_count,
+            analysis.estimated_functions
+        )
+        
+        if not size_check.allowed:
+            # Repo added but too large - return warning with upgrade CTA
+            logger.info(
+                "Repo too large for user tier",
+                user_id=user_id,
+                repo_id=repo["id"],
+                file_count=analysis.file_count,
+                tier=size_check.tier
+            )
+            return {
+                "repo_id": repo["id"],
+                "status": "added",
+                "indexing_blocked": True,
+                "analysis": analysis.to_dict(),
+                "limit_check": size_check.to_dict(),
+                "message": size_check.message
             }
         
         return {
             "repo_id": repo["id"],
             "status": "added",
-            "message": "Repository added successfully"
+            "indexing_blocked": False,
+            "analysis": analysis.to_dict(),
+            "message": "Repository added successfully. Ready for indexing."
         }
     except Exception as e:
+        logger.error("Failed to add repository", error=str(e), user_id=user_id)
+        capture_exception(e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -90,11 +136,48 @@ async def index_repository(
     incremental: bool = True,
     auth: AuthContext = Depends(require_auth)
 ):
-    """Trigger indexing for a repository."""
+    """Trigger indexing for a repository with tier-based size limits."""
     start_time = time.time()
+    user_id = auth.user_id
+    
+    # Validate user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
     
     try:
-        repo = get_repo_or_404(repo_id, auth.user_id)
+        repo = get_repo_or_404(repo_id, user_id)
+        
+        # Re-check size limits before indexing (in case tier changed or repo updated)
+        analysis = repo_validator.analyze_repo(repo["local_path"])
+        
+        # Fail CLOSED if analysis failed
+        if not analysis.success:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "ANALYSIS_FAILED",
+                    "analysis": analysis.to_dict(),
+                    "message": f"Cannot index: {analysis.error}"
+                }
+            )
+        
+        size_check = user_limits.check_repo_size(
+            user_id,
+            analysis.file_count,
+            analysis.estimated_functions
+        )
+        
+        if not size_check.allowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "REPO_TOO_LARGE",
+                    "analysis": analysis.to_dict(),
+                    "limit_check": size_check.to_dict(),
+                    "message": size_check.message
+                }
+            )
+        
         repo_manager.update_status(repo_id, "indexing")
         
         # Check for incremental
@@ -132,7 +215,12 @@ async def index_repository(
             "index_type": index_type,
             "commit": current_commit[:8]
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error("Indexing failed", repo_id=repo_id, error=str(e))
+        capture_exception(e)
+        repo_manager.update_status(repo_id, "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -168,6 +256,24 @@ async def websocket_index(websocket: WebSocket, repo_id: str):
     repo = repo_manager.get_repo_for_user(repo_id, user_id)
     if not repo:
         await websocket.close(code=4004, reason="Repository not found")
+        return
+    
+    # Check size limits before WebSocket indexing
+    analysis = repo_validator.analyze_repo(repo["local_path"])
+    
+    # Fail CLOSED if analysis failed
+    if not analysis.success:
+        await websocket.close(code=4005, reason=f"Analysis failed: {analysis.error}")
+        return
+    
+    size_check = user_limits.check_repo_size(
+        user_id,
+        analysis.file_count,
+        analysis.estimated_functions
+    )
+    
+    if not size_check.allowed:
+        await websocket.close(code=4003, reason=size_check.message)
         return
     
     await websocket.accept()
