@@ -25,6 +25,7 @@ from routes.repos import router as repos_router, websocket_index
 from routes.search import router as search_router
 from routes.analysis import router as analysis_router
 from routes.api_keys import router as api_keys_router
+from routes.users import router as users_router
 
 
 # Lifespan context manager for startup/shutdown
@@ -86,6 +87,7 @@ app.include_router(repos_router, prefix=API_PREFIX)
 app.include_router(search_router, prefix=API_PREFIX)
 app.include_router(analysis_router, prefix=API_PREFIX)
 app.include_router(api_keys_router, prefix=API_PREFIX)
+app.include_router(users_router, prefix=API_PREFIX)
 
 # WebSocket endpoint (versioned)
 app.add_api_websocket_route(f"{API_PREFIX}/ws/index/{{repo_id}}", websocket_index)
