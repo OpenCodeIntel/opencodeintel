@@ -106,12 +106,24 @@ export function LandingPage() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
-  const [searchCount, setSearchCount] = useState(0)
+  const [remaining, setRemaining] = useState(50)  // Will be updated from backend
+  const [limit, setLimit] = useState(50)          // Total limit from backend
   const [hasSearched, setHasSearched] = useState(false)
   const [availableRepos, setAvailableRepos] = useState<string[]>([])
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null)
 
-  const FREE_LIMIT = 5
-  const remaining = FREE_LIMIT - searchCount
+  // Fetch rate limit status on mount (backend is source of truth)
+  useEffect(() => {
+    fetch(`${API_URL}/playground/limits`, {
+      credentials: 'include',  // Send cookies for session tracking
+    })
+      .then(res => res.json())
+      .then(data => {
+        setRemaining(data.remaining ?? 50)
+        setLimit(data.limit ?? 50)
+      })
+      .catch(console.error)
+  }, [])
 
   useEffect(() => {
     fetch(`${API_URL}/playground/repos`)
@@ -125,23 +137,36 @@ export function LandingPage() {
 
   const handleSearch = async (searchQuery?: string) => {
     const q = searchQuery || query
-    if (!q.trim() || loading || searchCount >= FREE_LIMIT) return
+    if (!q.trim() || loading || remaining <= 0) return
 
     setLoading(true)
     setHasSearched(true)
+    setRateLimitError(null)
     const startTime = Date.now()
 
     try {
       const response = await fetch(`${API_URL}/playground/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',  // Send cookies for session tracking
         body: JSON.stringify({ query: q, demo_repo: selectedRepo, max_results: 10 })
       })
       const data = await response.json()
+      
       if (response.ok) {
         setResults(data.results || [])
-        setSearchTime(Date.now() - startTime)
-        setSearchCount(prev => prev + 1)
+        setSearchTime(data.search_time_ms || (Date.now() - startTime))
+        // Update remaining from backend (source of truth)
+        if (typeof data.remaining_searches === 'number') {
+          setRemaining(data.remaining_searches)
+        }
+        if (typeof data.limit === 'number') {
+          setLimit(data.limit)
+        }
+      } else if (response.status === 429) {
+        // Rate limit exceeded
+        setRateLimitError(data.detail?.message || 'Daily limit reached. Sign up for unlimited searches!')
+        setRemaining(0)
       }
     } catch (error) {
       console.error('Search error:', error)
@@ -240,7 +265,7 @@ export function LandingPage() {
                 </div>
                 <Button
                   type="submit"
-                  disabled={loading || !query.trim() || searchCount >= FREE_LIMIT}
+                  disabled={loading || !query.trim() || remaining <= 0}
                   className="px-6 py-3 h-auto bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 rounded-xl disabled:opacity-50 shrink-0"
                 >
                   {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'Search'}
@@ -281,15 +306,17 @@ export function LandingPage() {
                 <span className="text-gray-400"><span className="text-white font-semibold">{results.length}</span> results</span>
                 {searchTime && <><span className="text-gray-700">•</span><span className="font-mono text-green-400">{searchTime}ms</span></>}
               </div>
-              {remaining > 0 && remaining < FREE_LIMIT && (
+              {remaining > 0 && remaining < limit && (
                 <div className="text-sm text-gray-500">{remaining} remaining</div>
               )}
             </div>
 
-            {searchCount >= FREE_LIMIT && (
+            {(remaining <= 0 || rateLimitError) && (
               <Card className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-blue-500/30 p-6 mb-6">
-                <h3 className="text-lg font-semibold mb-2">You've used all free searches</h3>
-                <p className="text-gray-300 mb-4">Sign up to get unlimited searches and index your own repos.</p>
+                <h3 className="text-lg font-semibold mb-2">You've reached today's limit</h3>
+                <p className="text-gray-300 mb-4">
+                  {rateLimitError || 'Sign up to get unlimited searches and index your own repos.'}
+                </p>
                 <Button onClick={() => navigate('/signup')} className="bg-white text-black hover:bg-gray-100">Get started — it's free</Button>
               </Card>
             )}

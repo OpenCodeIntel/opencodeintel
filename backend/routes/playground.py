@@ -1,22 +1,31 @@
-"""Playground routes - no auth required, rate limited."""
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
-from collections import defaultdict
-import time as time_module
+"""
+Playground routes - no auth required, rate limited via Redis.
 
-from dependencies import indexer, cache, repo_manager
+Rate limiting strategy (see #93):
+- Session token (httpOnly cookie): 50 searches/day per device
+- IP fallback: 100 searches/day for shared networks
+- Global circuit breaker: 10k searches/hour (cost protection)
+"""
+import os
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
+import time
+
+from dependencies import indexer, cache, repo_manager, redis_client
 from services.input_validator import InputValidator
 from services.observability import logger
+from services.playground_limiter import PlaygroundLimiter, get_playground_limiter
 
 router = APIRouter(prefix="/playground", tags=["Playground"])
 
 # Demo repo mapping (populated on startup)
 DEMO_REPO_IDS = {}
 
-# Rate limiting config
-PLAYGROUND_LIMIT = 10  # searches per hour
-PLAYGROUND_WINDOW = 3600  # 1 hour
-playground_rate_limits = defaultdict(list)
+# Session cookie config
+SESSION_COOKIE_NAME = "pg_session"
+SESSION_COOKIE_MAX_AGE = 86400  # 24 hours
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").lower() == "production"
 
 
 class PlaygroundSearchRequest(BaseModel):
@@ -45,21 +54,6 @@ async def load_demo_repos():
         logger.warning("Could not load demo repos", error=str(e))
 
 
-def _check_rate_limit(ip: str) -> tuple[bool, int]:
-    """Check if IP is within rate limit."""
-    now = time_module.time()
-    playground_rate_limits[ip] = [
-        t for t in playground_rate_limits[ip] if now - t < PLAYGROUND_WINDOW
-    ]
-    remaining = PLAYGROUND_LIMIT - len(playground_rate_limits[ip])
-    return (remaining > 0, max(0, remaining))
-
-
-def _record_search(ip: str):
-    """Record a search for rate limiting."""
-    playground_rate_limits[ip].append(time_module.time())
-
-
 def _get_client_ip(req: Request) -> str:
     """Extract client IP from request."""
     client_ip = req.client.host if req.client else "unknown"
@@ -69,18 +63,81 @@ def _get_client_ip(req: Request) -> str:
     return client_ip
 
 
-@router.post("/search")
-async def playground_search(request: PlaygroundSearchRequest, req: Request):
-    """Public playground search - rate limited by IP."""
+def _get_session_token(req: Request) -> Optional[str]:
+    """Get session token from cookie."""
+    return req.cookies.get(SESSION_COOKIE_NAME)
+
+
+def _set_session_cookie(response: Response, token: str):
+    """Set httpOnly session cookie."""
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,           # Can't be accessed by JavaScript
+        samesite="lax",          # CSRF protection
+        secure=IS_PRODUCTION,    # HTTPS only in production
+    )
+
+
+def _get_limiter() -> PlaygroundLimiter:
+    """Get the playground limiter instance."""
+    return get_playground_limiter(redis_client)
+
+
+@router.get("/limits")
+async def get_playground_limits(req: Request):
+    """
+    Get current rate limit status for this user.
+    
+    Frontend should call this on page load to show accurate remaining count.
+    """
+    session_token = _get_session_token(req)
     client_ip = _get_client_ip(req)
     
-    # Rate limit check
-    allowed, remaining = _check_rate_limit(client_ip)
-    if not allowed:
+    limiter = _get_limiter()
+    result = limiter.check_limit(session_token, client_ip)
+    
+    return {
+        "remaining": result.remaining,
+        "limit": result.limit,
+        "resets_at": result.resets_at.isoformat(),
+        "tier": "anonymous",
+    }
+
+
+@router.post("/search")
+async def playground_search(
+    request: PlaygroundSearchRequest, 
+    req: Request,
+    response: Response
+):
+    """
+    Public playground search - rate limited by session/IP.
+    
+    Sets httpOnly cookie on first request to track device.
+    """
+    session_token = _get_session_token(req)
+    client_ip = _get_client_ip(req)
+    
+    # Rate limit check AND record
+    limiter = _get_limiter()
+    limit_result = limiter.check_and_record(session_token, client_ip)
+    
+    if not limit_result.allowed:
         raise HTTPException(
             status_code=429,
-            detail="Rate limit exceeded. Sign up for unlimited searches!"
+            detail={
+                "message": limit_result.reason,
+                "remaining": 0,
+                "limit": limit_result.limit,
+                "resets_at": limit_result.resets_at.isoformat(),
+            }
         )
+    
+    # Set session cookie if new token was created
+    if limit_result.session_token:
+        _set_session_cookie(response, limit_result.session_token)
     
     # Validate query
     valid_query, query_error = InputValidator.validate_search_query(request.query)
@@ -100,7 +157,6 @@ async def playground_search(request: PlaygroundSearchRequest, req: Request):
                 detail=f"Demo repo '{request.demo_repo}' not available"
             )
     
-    import time
     start_time = time.time()
     
     try:
@@ -113,7 +169,8 @@ async def playground_search(request: PlaygroundSearchRequest, req: Request):
                 "results": cached_results,
                 "count": len(cached_results),
                 "cached": True,
-                "remaining_searches": remaining
+                "remaining_searches": limit_result.remaining,
+                "limit": limit_result.limit,
             }
         
         # Search
@@ -125,17 +182,23 @@ async def playground_search(request: PlaygroundSearchRequest, req: Request):
             use_reranking=True
         )
         
-        # Cache and record
+        # Cache results
         cache.set_search_results(sanitized_query, repo_id, results, ttl=3600)
-        _record_search(client_ip)
+        
+        search_time = int((time.time() - start_time) * 1000)
         
         return {
             "results": results,
             "count": len(results),
             "cached": False,
-            "remaining_searches": remaining - 1
+            "remaining_searches": limit_result.remaining,
+            "limit": limit_result.limit,
+            "search_time_ms": search_time,
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error("Playground search failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -149,3 +212,13 @@ async def list_playground_repos():
             {"id": "express", "name": "Express", "description": "Node.js framework", "available": "express" in DEMO_REPO_IDS},
         ]
     }
+
+
+@router.get("/stats")
+async def get_playground_stats():
+    """
+    Get playground usage stats (for monitoring/debugging).
+    """
+    limiter = _get_limiter()
+    stats = limiter.get_usage_stats()
+    return stats

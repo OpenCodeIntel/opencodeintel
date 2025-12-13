@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { API_URL } from '../config/api'
@@ -29,28 +29,38 @@ export function Playground({ onSignupClick }: PlaygroundProps) {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
-  const [searchCount, setSearchCount] = useState(0)
+  const [remaining, setRemaining] = useState(50)  // Will be updated from backend
+  const [limit, setLimit] = useState(50)          // Total limit from backend
   const [hasSearched, setHasSearched] = useState(false)
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null)
 
-  const FREE_SEARCH_LIMIT = 5
+  // Fetch rate limit status on mount (backend is source of truth)
+  useEffect(() => {
+    fetch(`${API_URL}/playground/limits`, {
+      credentials: 'include',  // Send cookies for session tracking
+    })
+      .then(res => res.json())
+      .then(data => {
+        setRemaining(data.remaining ?? 50)
+        setLimit(data.limit ?? 50)
+      })
+      .catch(console.error)
+  }, [])
 
   const handleSearch = async (searchQuery?: string) => {
     const q = searchQuery || query
-    if (!q.trim()) return
-
-    if (searchCount >= FREE_SEARCH_LIMIT) {
-      // Show signup prompt
-      return
-    }
+    if (!q.trim() || loading || remaining <= 0) return
 
     setLoading(true)
     setHasSearched(true)
+    setRateLimitError(null)
     const startTime = Date.now()
 
     try {
       const response = await fetch(`${API_URL}/playground/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',  // Send cookies for session tracking
         body: JSON.stringify({
           query: q,
           demo_repo: selectedRepo,
@@ -59,17 +69,28 @@ export function Playground({ onSignupClick }: PlaygroundProps) {
       })
 
       const data = await response.json()
-      setResults(data.results || [])
-      setSearchTime(Date.now() - startTime)
-      setSearchCount(prev => prev + 1)
+      
+      if (response.ok) {
+        setResults(data.results || [])
+        setSearchTime(data.search_time_ms || (Date.now() - startTime))
+        // Update remaining from backend (source of truth)
+        if (typeof data.remaining_searches === 'number') {
+          setRemaining(data.remaining_searches)
+        }
+        if (typeof data.limit === 'number') {
+          setLimit(data.limit)
+        }
+      } else if (response.status === 429) {
+        // Rate limit exceeded
+        setRateLimitError(data.detail?.message || 'Daily limit reached. Sign up for unlimited searches!')
+        setRemaining(0)
+      }
     } catch (error) {
       console.error('Search error:', error)
     } finally {
       setLoading(false)
     }
   }
-
-  const remainingSearches = FREE_SEARCH_LIMIT - searchCount
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -171,9 +192,9 @@ export function Playground({ onSignupClick }: PlaygroundProps) {
         )}
 
         {/* Remaining searches indicator */}
-        {searchCount > 0 && remainingSearches > 0 && (
+        {hasSearched && remaining > 0 && remaining < limit && (
           <div className="text-center mt-4 text-sm text-gray-500">
-            {remainingSearches} free {remainingSearches === 1 ? 'search' : 'searches'} remaining •{' '}
+            {remaining} free {remaining === 1 ? 'search' : 'searches'} remaining •{' '}
             <button onClick={onSignupClick} className="text-blue-600 hover:underline">
               Sign up for unlimited
             </button>
@@ -194,11 +215,11 @@ export function Playground({ onSignupClick }: PlaygroundProps) {
           )}
 
           {/* Limit Reached Banner */}
-          {searchCount >= FREE_SEARCH_LIMIT && (
+          {(remaining <= 0 || rateLimitError) && (
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 mb-6 text-white">
-              <h3 className="text-lg font-semibold mb-2">You've used all free searches</h3>
+              <h3 className="text-lg font-semibold mb-2">You've reached today's limit</h3>
               <p className="text-blue-100 mb-4">
-                Sign up to get unlimited searches, index your own repos, and more.
+                {rateLimitError || 'Sign up to get unlimited searches, index your own repos, and more.'}
               </p>
               <button
                 onClick={onSignupClick}

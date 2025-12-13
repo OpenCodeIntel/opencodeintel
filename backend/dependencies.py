@@ -42,6 +42,9 @@ user_limits = init_user_limits_service(
 # Repository size validation
 repo_validator = get_repo_validator()
 
+# Redis client (for playground limiter and other services)
+redis_client = cache.redis if cache.redis else None
+
 
 def get_repo_or_404(repo_id: str, user_id: str) -> dict:
     """
