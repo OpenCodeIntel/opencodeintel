@@ -9,7 +9,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/usage")
-async def get_user_usage(auth: AuthContext = Depends(require_auth)):
+def get_user_usage(auth: AuthContext = Depends(require_auth)):
     """
     Get current user's usage and limits.
     
@@ -42,14 +42,14 @@ async def get_user_usage(auth: AuthContext = Depends(require_auth)):
             }
         }
     
-    usage = await user_limits.get_usage_summary(user_id)
+    usage = user_limits.get_usage_summary(user_id)
     logger.info("Usage retrieved", user_id=user_id, tier=usage.get("tier"))
     
     return usage
 
 
 @router.get("/limits/check-repo-add")
-async def check_can_add_repo(auth: AuthContext = Depends(require_auth)):
+def check_can_add_repo(auth: AuthContext = Depends(require_auth)):
     """
     Check if user can add another repository.
     
@@ -61,5 +61,5 @@ async def check_can_add_repo(auth: AuthContext = Depends(require_auth)):
     if not user_id:
         return {"allowed": True, "message": "OK"}
     
-    result = await user_limits.check_repo_count(user_id)
+    result = user_limits.check_repo_count(user_id)
     return result.to_dict()

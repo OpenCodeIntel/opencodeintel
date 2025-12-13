@@ -106,12 +106,12 @@ class UserLimitsService:
         limits = UserLimitsService(supabase_client, redis_client)
         
         # Check if user can add another repo
-        result = await limits.check_repo_count(user_id)
+        result = limits.check_repo_count(user_id)
         if not result.allowed:
             raise HTTPException(403, result.message)
         
         # Check if repo size is within limits
-        result = await limits.check_repo_size(user_id, file_count, function_count)
+        result = limits.check_repo_size(user_id, file_count, function_count)
         if not result.allowed:
             raise HTTPException(400, result.message)
     """
@@ -123,7 +123,7 @@ class UserLimitsService:
     
     # ===== TIER MANAGEMENT =====
     
-    async def get_user_tier(self, user_id: str) -> UserTier:
+    def get_user_tier(self, user_id: str) -> UserTier:
         """
         Get user's current tier.
         
@@ -141,7 +141,7 @@ class UserLimitsService:
                     pass
         
         # Query Supabase
-        tier = await self._get_tier_from_db(user_id)
+        tier = self._get_tier_from_db(user_id)
         
         # Cache the result
         if self.redis:
@@ -150,7 +150,7 @@ class UserLimitsService:
         
         return tier
     
-    async def _get_tier_from_db(self, user_id: str) -> UserTier:
+    def _get_tier_from_db(self, user_id: str) -> UserTier:
         """Get tier from Supabase user_profiles table"""
         try:
             result = self.supabase.table("user_profiles").select("tier").eq("user_id", user_id).execute()
@@ -167,14 +167,14 @@ class UserLimitsService:
         """Get limits for a tier"""
         return TIER_LIMITS.get(tier, TIER_LIMITS[UserTier.FREE])
     
-    async def get_user_limits(self, user_id: str) -> TierLimits:
+    def get_user_limits(self, user_id: str) -> TierLimits:
         """Get limits for a specific user"""
-        tier = await self.get_user_tier(user_id)
+        tier = self.get_user_tier(user_id)
         return self.get_limits(tier)
     
     # ===== REPO COUNT LIMITS (#95) =====
     
-    async def get_user_repo_count(self, user_id: str) -> int:
+    def get_user_repo_count(self, user_id: str) -> int:
         """Get current repo count for user"""
         try:
             result = self.supabase.table("repositories").select("id", count="exact").eq("user_id", user_id).execute()
@@ -183,16 +183,16 @@ class UserLimitsService:
             logger.error("Failed to get repo count", user_id=user_id, error=str(e))
             return 0
     
-    async def check_repo_count(self, user_id: str) -> LimitCheckResult:
+    def check_repo_count(self, user_id: str) -> LimitCheckResult:
         """
         Check if user can add another repository.
         
         Returns:
             LimitCheckResult with allowed=True if under limit
         """
-        tier = await self.get_user_tier(user_id)
+        tier = self.get_user_tier(user_id)
         limits = self.get_limits(tier)
-        current_count = await self.get_user_repo_count(user_id)
+        current_count = self.get_user_repo_count(user_id)
         
         # Unlimited repos
         if limits.max_repos is None:
@@ -223,7 +223,7 @@ class UserLimitsService:
     
     # ===== REPO SIZE LIMITS (#94) =====
     
-    async def check_repo_size(
+    def check_repo_size(
         self, 
         user_id: str, 
         file_count: int, 
@@ -240,7 +240,7 @@ class UserLimitsService:
         Returns:
             LimitCheckResult with allowed=True if within limits
         """
-        tier = await self.get_user_tier(user_id)
+        tier = self.get_user_tier(user_id)
         limits = self.get_limits(tier)
         
         # Check file count
@@ -290,14 +290,14 @@ class UserLimitsService:
     
     # ===== USAGE SUMMARY =====
     
-    async def get_usage_summary(self, user_id: str) -> Dict[str, Any]:
+    def get_usage_summary(self, user_id: str) -> Dict[str, Any]:
         """
         Get complete usage summary for user.
         Useful for dashboard display.
         """
-        tier = await self.get_user_tier(user_id)
+        tier = self.get_user_tier(user_id)
         limits = self.get_limits(tier)
-        repo_count = await self.get_user_repo_count(user_id)
+        repo_count = self.get_user_repo_count(user_id)
         
         return {
             "tier": tier.value,
