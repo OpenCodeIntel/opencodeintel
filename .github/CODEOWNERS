@@ -1,0 +1,25 @@
+# CODEOWNERS
+# This file defines who is responsible for code in this repository.
+# These owners will be automatically requested for review on PRs.
+# Learn more: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @devanshurajesh
+
+# Backend
+/backend/ @devanshurajesh
+
+# Frontend
+/frontend/ @devanshurajesh
+
+# MCP Server
+/mcp-server/ @devanshurajesh
+
+# Infrastructure & DevOps
+/docker-compose*.yml @devanshurajesh
+/Makefile @devanshurajesh
+/.github/ @devanshurajesh
+
+# Documentation
+*.md @devanshurajesh
+/docs/ @devanshurajesh
