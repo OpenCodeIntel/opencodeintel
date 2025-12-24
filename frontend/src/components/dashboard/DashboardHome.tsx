@@ -216,7 +216,8 @@ export function DashboardHome() {
               <SearchPanel 
                 repoId={selectedRepo} 
                 apiUrl={API_URL} 
-                apiKey={session?.access_token || ''} 
+                apiKey={session?.access_token || ''}
+                repoUrl={selectedRepoData?.git_url?.replace('.git', '')}
               />
             )}
 
