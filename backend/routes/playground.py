@@ -64,6 +64,29 @@ class ValidateRepoRequest(BaseModel):
         return v
 
 
+class IndexRepoRequest(BaseModel):
+    """
+    Request body for anonymous repository indexing.
+
+    Used by POST /playground/index endpoint (#125).
+    """
+    github_url: str
+    branch: Optional[str] = None  # None = use repo's default branch
+
+    @field_validator("github_url")
+    @classmethod
+    def validate_github_url_format(cls, v: str) -> str:
+        """Basic URL format validation (detailed validation in endpoint)."""
+        v = v.strip()
+        if not v:
+            raise ValueError("GitHub URL is required")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        if "github.com" not in v.lower():
+            raise ValueError("URL must be a GitHub repository URL")
+        return v
+
+
 async def load_demo_repos():
     """Load pre-indexed demo repos. Called from main.py on startup."""
     # Note: We mutate DEMO_REPO_IDS dict, no need for 'global' statement
@@ -591,3 +614,189 @@ async def validate_github_repo(request: ValidateRepoRequest, req: Request):
                 response_time_ms=response_time_ms)
 
     return result
+
+
+# =============================================================================
+# Anonymous Indexing Endpoint (#125)
+# =============================================================================
+
+@router.post("/index", status_code=202)
+async def start_anonymous_indexing(
+    request: IndexRepoRequest,
+    req: Request,
+    response: Response
+):
+    """
+    Start indexing a public GitHub repository for anonymous users.
+
+    This endpoint validates the repository and queues it for indexing.
+    Returns a job_id that can be used to poll for status via GET /index/{job_id}.
+
+    Constraints:
+    - Max 200 code files (anonymous limit)
+    - 1 repo per session (no concurrent indexing)
+    - Public repos only
+    - 24hr TTL on indexed data
+
+    See issue #125 for full specification.
+    """
+    start_time = time.time()
+    limiter = _get_limiter()
+
+    # --- Step 1: Session validation (get existing or create new) ---
+    session_token = _get_session_token(req)
+    client_ip = _get_client_ip(req)
+
+    if not session_token:
+        # Create new session
+        session_token = limiter.create_session()
+        _set_session_cookie(response, session_token)
+        logger.info("Created new session for indexing",
+                    session_token=session_token[:8],
+                    client_ip=client_ip)
+
+    # --- Step 2: Check if session already has an indexed repo ---
+    session_data = limiter.get_session_data(session_token)
+
+    if session_data.indexed_repo:
+        # Check if the existing repo has expired
+        from datetime import datetime, timezone
+
+        expires_at_str = session_data.indexed_repo.get("expires_at", "")
+        is_expired = False
+
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                is_expired = datetime.now(timezone.utc) > expires_at
+            except (ValueError, AttributeError):
+                is_expired = True  # Treat parse errors as expired
+
+        if not is_expired:
+            # Session already has a valid indexed repo - return 409 Conflict
+            logger.info("Session already has indexed repo",
+                        session_token=session_token[:8],
+                        existing_repo=session_data.indexed_repo.get("repo_id"))
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "already_indexed",
+                    "message": "You already have an indexed repository. "
+                               "Only 1 repo per session allowed.",
+                    "indexed_repo": session_data.indexed_repo
+                }
+            )
+        else:
+            # Existing repo expired - allow new indexing
+            logger.info("Existing indexed repo expired, allowing new indexing",
+                        session_token=session_token[:8])
+
+    # --- Step 3: Validate GitHub URL (reuse existing logic) ---
+    owner, repo_name, parse_error = _parse_github_url(request.github_url)
+    if parse_error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "reason": "invalid_url",
+                "message": parse_error
+            }
+        )
+
+    # Fetch repo metadata from GitHub
+    metadata = await _fetch_repo_metadata(owner, repo_name)
+
+    if "error" in metadata:
+        error_type = metadata["error"]
+        if error_type == "not_found":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "validation_failed",
+                    "reason": "not_found",
+                    "message": "Repository not found. Check the URL or ensure it's public."
+                }
+            )
+        elif error_type == "rate_limited":
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "github_rate_limit",
+                    "message": "GitHub API rate limit exceeded. Try again later."
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "github_error",
+                    "message": metadata.get("message", "Failed to fetch repository info")
+                }
+            )
+
+    # Check if private
+    if metadata.get("private", False):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "reason": "private",
+                "message": "This repository is private. "
+                           "Anonymous indexing only supports public repositories."
+            }
+        )
+
+    # Determine branch
+    branch = request.branch or metadata.get("default_branch", "main")
+
+    # Get file count
+    file_count, count_error = await _count_code_files(owner, repo_name, branch)
+
+    # Handle truncated tree (very large repo)
+    if count_error == "truncated":
+        repo_size_kb = metadata.get("size", 0)
+        file_count = max(repo_size_kb // 3, ANONYMOUS_FILE_LIMIT + 1)
+    elif count_error:
+        repo_size_kb = metadata.get("size", 0)
+        file_count = max(repo_size_kb // 3, 1)
+
+    # Check file limit
+    if file_count > ANONYMOUS_FILE_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "reason": "too_large",
+                "message": f"Repository has {file_count:,} code files. "
+                           f"Anonymous limit is {ANONYMOUS_FILE_LIMIT}.",
+                "file_count": file_count,
+                "limit": ANONYMOUS_FILE_LIMIT
+            }
+        )
+
+    # --- Validation passed! ---
+    # Next checkpoint will add: job creation, background task, Redis tracking
+
+    response_time_ms = int((time.time() - start_time) * 1000)
+
+    # TODO: Checkpoint 2 will add actual indexing logic
+    # For now, return a placeholder to confirm endpoint works
+    logger.info("Index request validated",
+                owner=owner, repo=repo_name, branch=branch,
+                file_count=file_count, session_token=session_token[:8],
+                response_time_ms=response_time_ms)
+
+    return {
+        "status": "checkpoint_1_complete",
+        "message": "Validation passed. Indexing logic will be added in next checkpoint.",
+        "validated": {
+            "owner": owner,
+            "repo_name": repo_name,
+            "branch": branch,
+            "file_count": file_count,
+            "github_url": request.github_url
+        },
+        "session_token": session_token[:8] + "...",
+        "response_time_ms": response_time_ms
+    }
