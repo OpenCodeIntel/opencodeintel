@@ -10,7 +10,7 @@ import os
 import re
 import httpx
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response, BackgroundTasks
 from pydantic import BaseModel, field_validator
 import time
 
@@ -19,6 +19,10 @@ from services.input_validator import InputValidator
 from services.repo_validator import RepoValidator
 from services.observability import logger
 from services.playground_limiter import PlaygroundLimiter, get_playground_limiter
+from services.anonymous_indexer import (
+    AnonymousIndexingJob,
+    run_indexing_job,
+)
 
 router = APIRouter(prefix="/playground", tags=["Playground"])
 
@@ -624,7 +628,8 @@ async def validate_github_repo(request: ValidateRepoRequest, req: Request):
 async def start_anonymous_indexing(
     request: IndexRepoRequest,
     req: Request,
-    response: Response
+    response: Response,
+    background_tasks: BackgroundTasks
 ):
     """
     Start indexing a public GitHub repository for anonymous users.
@@ -775,28 +780,56 @@ async def start_anonymous_indexing(
             }
         )
 
-    # --- Validation passed! ---
-    # Next checkpoint will add: job creation, background task, Redis tracking
+    # --- Validation passed! Create job and start background indexing ---
 
     response_time_ms = int((time.time() - start_time) * 1000)
 
-    # TODO: Checkpoint 2 will add actual indexing logic
-    # For now, return a placeholder to confirm endpoint works
-    logger.info("Index request validated",
-                owner=owner, repo=repo_name, branch=branch,
-                file_count=file_count, session_token=session_token[:8],
+    # Initialize job manager
+    job_manager = AnonymousIndexingJob(redis_client)
+    job_id = job_manager.generate_job_id()
+
+    # Create job in Redis
+    job_manager.create_job(
+        job_id=job_id,
+        session_id=session_token,
+        github_url=request.github_url,
+        owner=owner,
+        repo_name=repo_name,
+        branch=branch,
+        file_count=file_count
+    )
+
+    # Queue background task
+    background_tasks.add_task(
+        run_indexing_job,
+        job_manager=job_manager,
+        indexer=indexer,
+        limiter=limiter,
+        job_id=job_id,
+        session_id=session_token,
+        github_url=request.github_url,
+        owner=owner,
+        repo_name=repo_name,
+        branch=branch,
+        file_count=file_count
+    )
+
+    logger.info("Indexing job queued",
+                job_id=job_id,
+                owner=owner,
+                repo=repo_name,
+                branch=branch,
+                file_count=file_count,
+                session_token=session_token[:8],
                 response_time_ms=response_time_ms)
 
+    # Estimate time based on file count (~0.3s per file)
+    estimated_seconds = max(10, int(file_count * 0.3))
+
     return {
-        "status": "checkpoint_1_complete",
-        "message": "Validation passed. Indexing logic will be added in next checkpoint.",
-        "validated": {
-            "owner": owner,
-            "repo_name": repo_name,
-            "branch": branch,
-            "file_count": file_count,
-            "github_url": request.github_url
-        },
-        "session_token": session_token[:8] + "...",
-        "response_time_ms": response_time_ms
+        "job_id": job_id,
+        "status": "queued",
+        "estimated_time_seconds": estimated_seconds,
+        "file_count": file_count,
+        "message": f"Indexing started. Poll /playground/index/{job_id} for status."
     }
