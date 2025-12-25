@@ -36,7 +36,7 @@ class PlaygroundSearchRequest(BaseModel):
 
 async def load_demo_repos():
     """Load pre-indexed demo repos. Called from main.py on startup."""
-    global DEMO_REPO_IDS
+    # Note: We mutate DEMO_REPO_IDS dict, no need for 'global' statement
     try:
         repos = repo_manager.list_repos()
         for repo in repos:
@@ -89,15 +89,15 @@ def _get_limiter() -> PlaygroundLimiter:
 async def get_playground_limits(req: Request):
     """
     Get current rate limit status for this user.
-    
+
     Frontend should call this on page load to show accurate remaining count.
     """
     session_token = _get_session_token(req)
     client_ip = _get_client_ip(req)
-    
+
     limiter = _get_limiter()
     result = limiter.check_limit(session_token, client_ip)
-    
+
     return {
         "remaining": result.remaining,
         "limit": result.limit,
@@ -106,24 +106,92 @@ async def get_playground_limits(req: Request):
     }
 
 
+@router.get("/session")
+async def get_session_info(req: Request, response: Response):
+    """
+    Get current session state including indexed repo info.
+
+    Returns complete session data for frontend state management.
+    Creates a new session if none exists.
+
+    Response schema (see issue #127):
+    {
+        "session_id": "pg_abc123...",
+        "created_at": "2025-12-24T10:00:00Z",
+        "expires_at": "2025-12-25T10:00:00Z",
+        "indexed_repo": {
+            "repo_id": "repo_abc123",
+            "github_url": "https://github.com/user/repo",
+            "name": "repo",
+            "indexed_at": "2025-12-24T10:05:00Z",
+            "expires_at": "2025-12-25T10:05:00Z",
+            "file_count": 198
+        },
+        "searches": {
+            "used": 12,
+            "limit": 50,
+            "remaining": 38
+        }
+    }
+    """
+    session_token = _get_session_token(req)
+    limiter = _get_limiter()
+
+    # Check if Redis is available
+    if not redis_client:
+        logger.error("Redis unavailable for session endpoint")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Service temporarily unavailable",
+                "retry_after": 30,
+            }
+        )
+
+    # Get existing session data
+    session_data = limiter.get_session_data(session_token)
+
+    # If no session exists, create one
+    if session_data.session_id is None:
+        new_token = limiter._generate_session_token()
+
+        if limiter.create_session(new_token):
+            _set_session_cookie(response, new_token)
+            session_data = limiter.get_session_data(new_token)
+            logger.info("Created new session via /session endpoint",
+                        session_token=new_token[:8])
+        else:
+            # Failed to create session (Redis issue)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "Failed to create session",
+                    "retry_after": 30,
+                }
+            )
+
+    # Return formatted response
+    return session_data.to_response(limit=limiter.SESSION_LIMIT_PER_DAY)
+
+
 @router.post("/search")
 async def playground_search(
-    request: PlaygroundSearchRequest, 
+    request: PlaygroundSearchRequest,
     req: Request,
     response: Response
 ):
     """
     Public playground search - rate limited by session/IP.
-    
+
     Sets httpOnly cookie on first request to track device.
     """
     session_token = _get_session_token(req)
     client_ip = _get_client_ip(req)
-    
+
     # Rate limit check AND record
     limiter = _get_limiter()
     limit_result = limiter.check_and_record(session_token, client_ip)
-    
+
     if not limit_result.allowed:
         raise HTTPException(
             status_code=429,
@@ -134,16 +202,16 @@ async def playground_search(
                 "resets_at": limit_result.resets_at.isoformat(),
             }
         )
-    
+
     # Set session cookie if new token was created
     if limit_result.session_token:
         _set_session_cookie(response, limit_result.session_token)
-    
+
     # Validate query
     valid_query, query_error = InputValidator.validate_search_query(request.query)
     if not valid_query:
         raise HTTPException(status_code=400, detail=f"Invalid query: {query_error}")
-    
+
     # Get demo repo ID
     repo_id = DEMO_REPO_IDS.get(request.demo_repo)
     if not repo_id:
@@ -156,12 +224,12 @@ async def playground_search(
                 status_code=404,
                 detail=f"Demo repo '{request.demo_repo}' not available"
             )
-    
+
     start_time = time.time()
-    
+
     try:
         sanitized_query = InputValidator.sanitize_string(request.query, max_length=200)
-        
+
         # Check cache
         cached_results = cache.get_search_results(sanitized_query, repo_id)
         if cached_results:
@@ -172,7 +240,7 @@ async def playground_search(
                 "remaining_searches": limit_result.remaining,
                 "limit": limit_result.limit,
             }
-        
+
         # Search
         results = await indexer.semantic_search(
             query=sanitized_query,
@@ -181,12 +249,12 @@ async def playground_search(
             use_query_expansion=True,
             use_reranking=True
         )
-        
+
         # Cache results
         cache.set_search_results(sanitized_query, repo_id, results, ttl=3600)
-        
+
         search_time = int((time.time() - start_time) * 1000)
-        
+
         return {
             "results": results,
             "count": len(results),
@@ -207,9 +275,24 @@ async def list_playground_repos():
     """List available demo repositories."""
     return {
         "repos": [
-            {"id": "flask", "name": "Flask", "description": "Python web framework", "available": "flask" in DEMO_REPO_IDS},
-            {"id": "fastapi", "name": "FastAPI", "description": "Modern Python API", "available": "fastapi" in DEMO_REPO_IDS},
-            {"id": "express", "name": "Express", "description": "Node.js framework", "available": "express" in DEMO_REPO_IDS},
+            {
+                "id": "flask",
+                "name": "Flask",
+                "description": "Python web framework",
+                "available": "flask" in DEMO_REPO_IDS
+            },
+            {
+                "id": "fastapi",
+                "name": "FastAPI",
+                "description": "Modern Python API",
+                "available": "fastapi" in DEMO_REPO_IDS
+            },
+            {
+                "id": "express",
+                "name": "Express",
+                "description": "Node.js framework",
+                "available": "express" in DEMO_REPO_IDS
+            },
         ]
     }
 
