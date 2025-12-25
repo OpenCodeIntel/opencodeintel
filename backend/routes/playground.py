@@ -7,13 +7,16 @@ Rate limiting strategy (see #93):
 - Global circuit breaker: 10k searches/hour (cost protection)
 """
 import os
+import re
+import httpx
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import time
 
 from dependencies import indexer, cache, repo_manager, redis_client
 from services.input_validator import InputValidator
+from services.repo_validator import RepoValidator
 from services.observability import logger
 from services.playground_limiter import PlaygroundLimiter, get_playground_limiter
 
@@ -27,11 +30,38 @@ SESSION_COOKIE_NAME = "pg_session"
 SESSION_COOKIE_MAX_AGE = 86400  # 24 hours
 IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").lower() == "production"
 
+# GitHub validation config
+GITHUB_URL_PATTERN = re.compile(
+    r"^https?://github\.com/(?P<owner>[a-zA-Z0-9_.-]+)/(?P<repo>[a-zA-Z0-9_.-]+)/?$"
+)
+ANONYMOUS_FILE_LIMIT = 200  # Max files for anonymous indexing
+GITHUB_API_BASE = "https://api.github.com"
+GITHUB_API_TIMEOUT = 10.0  # seconds
+VALIDATION_CACHE_TTL = 300  # 5 minutes
+
 
 class PlaygroundSearchRequest(BaseModel):
     query: str
     demo_repo: str = "flask"
     max_results: int = 10
+
+
+class ValidateRepoRequest(BaseModel):
+    """Request body for GitHub repo validation."""
+    github_url: str
+
+    @field_validator("github_url")
+    @classmethod
+    def validate_github_url_format(cls, v: str) -> str:
+        """Basic URL format validation."""
+        v = v.strip()
+        if not v:
+            raise ValueError("GitHub URL is required")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        if "github.com" not in v.lower():
+            raise ValueError("URL must be a GitHub repository URL")
+        return v
 
 
 async def load_demo_repos():
@@ -305,3 +335,259 @@ async def get_playground_stats():
     limiter = _get_limiter()
     stats = limiter.get_usage_stats()
     return stats
+
+
+def _parse_github_url(url: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Parse GitHub URL to extract owner and repo.
+
+    Returns:
+        (owner, repo, error) - error is None if successful
+    """
+    match = GITHUB_URL_PATTERN.match(url.strip().rstrip("/"))
+    if not match:
+        return None, None, "Invalid GitHub URL format. Expected: https://github.com/owner/repo"
+    return match.group("owner"), match.group("repo"), None
+
+
+async def _fetch_repo_metadata(owner: str, repo: str) -> dict:
+    """
+    Fetch repository metadata from GitHub API.
+
+    Returns dict with repo info or error details.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "OpenCodeIntel/1.0",
+    }
+
+    # Add GitHub token if available (for higher rate limits)
+    github_token = os.getenv("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
+    async with httpx.AsyncClient(timeout=GITHUB_API_TIMEOUT) as client:
+        try:
+            response = await client.get(url, headers=headers)
+
+            if response.status_code == 404:
+                return {"error": "not_found", "message": "Repository not found"}
+            if response.status_code == 403:
+                return {
+                    "error": "rate_limited",
+                    "message": "GitHub API rate limit exceeded"
+                }
+            if response.status_code != 200:
+                return {
+                    "error": "api_error",
+                    "message": f"GitHub API error: {response.status_code}"
+                }
+
+            return response.json()
+        except httpx.TimeoutException:
+            return {"error": "timeout", "message": "GitHub API request timed out"}
+        except Exception as e:
+            logger.error("GitHub API request failed", error=str(e))
+            return {"error": "request_failed", "message": str(e)}
+
+
+async def _count_code_files(
+    owner: str, repo: str, default_branch: str
+) -> tuple[int, Optional[str]]:
+    """
+    Count code files in repository using GitHub tree API.
+
+    Returns:
+        (file_count, error) - error is None if successful
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1"
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "OpenCodeIntel/1.0",
+    }
+
+    github_token = os.getenv("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
+    async with httpx.AsyncClient(timeout=GITHUB_API_TIMEOUT) as client:
+        try:
+            response = await client.get(url, headers=headers)
+
+            if response.status_code == 404:
+                return 0, "Could not fetch repository tree"
+            if response.status_code == 403:
+                return 0, "GitHub API rate limit exceeded"
+            if response.status_code != 200:
+                return 0, f"GitHub API error: {response.status_code}"
+
+            data = response.json()
+
+            # Check if tree was truncated (very large repos)
+            if data.get("truncated", False):
+                # For truncated trees, estimate from repo size
+                # GitHub's size is in KB, rough estimate: 1 code file per 5KB
+                return -1, "truncated"
+
+            # Count files with code extensions
+            code_extensions = RepoValidator.CODE_EXTENSIONS
+            skip_dirs = RepoValidator.SKIP_DIRS
+
+            count = 0
+            for item in data.get("tree", []):
+                if item.get("type") != "blob":
+                    continue
+
+                path = item.get("path", "")
+
+                # Skip if in excluded directory
+                path_parts = path.split("/")
+                if any(part in skip_dirs for part in path_parts):
+                    continue
+
+                # Check extension
+                ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
+                if ext.lower() in code_extensions:
+                    count += 1
+
+            return count, None
+        except httpx.TimeoutException:
+            return 0, "GitHub API request timed out"
+        except Exception as e:
+            logger.error("GitHub tree API failed", error=str(e))
+            return 0, str(e)
+
+
+@router.post("/validate-repo")
+async def validate_github_repo(request: ValidateRepoRequest, req: Request):
+    """
+    Validate a GitHub repository URL for anonymous indexing.
+
+    Checks:
+    - URL format is valid
+    - Repository exists and is public
+    - File count is within anonymous limit (200 files)
+
+    Response varies based on validation result (see issue #124).
+    """
+    start_time = time.time()
+
+    # Check cache first
+    cache_key = f"validate:{request.github_url}"
+    cached = cache.get(cache_key) if cache else None
+    if cached:
+        logger.info("Returning cached validation", url=request.github_url[:50])
+        return cached
+
+    # Parse URL
+    owner, repo_name, parse_error = _parse_github_url(request.github_url)
+    if parse_error:
+        return {
+            "valid": False,
+            "reason": "invalid_url",
+            "message": parse_error,
+        }
+
+    # Fetch repo metadata from GitHub
+    metadata = await _fetch_repo_metadata(owner, repo_name)
+
+    if "error" in metadata:
+        error_type = metadata["error"]
+        if error_type == "not_found":
+            return {
+                "valid": False,
+                "reason": "not_found",
+                "message": "Repository not found. Check the URL or ensure it's public.",
+            }
+        elif error_type == "rate_limited":
+            raise HTTPException(
+                status_code=429,
+                detail={"message": "GitHub API rate limit exceeded. Try again later."}
+            )
+        else:
+            raise HTTPException(
+                status_code=502,
+                detail={"message": metadata.get("message", "Failed to fetch repository info")}
+            )
+
+    # Check if private
+    is_private = metadata.get("private", False)
+    if is_private:
+        return {
+            "valid": True,
+            "repo_name": repo_name,
+            "owner": owner,
+            "is_public": False,
+            "can_index": False,
+            "reason": "private",
+            "message": "This repository is private. "
+                       "Anonymous indexing only supports public repositories.",
+        }
+
+    # Get file count
+    default_branch = metadata.get("default_branch", "main")
+    file_count, count_error = await _count_code_files(owner, repo_name, default_branch)
+
+    # Handle truncated tree (very large repo)
+    if count_error == "truncated":
+        # Estimate from repo size (GitHub size is in KB)
+        repo_size_kb = metadata.get("size", 0)
+        # Rough estimate: 1 code file per 3KB for code repos
+        file_count = max(repo_size_kb // 3, ANONYMOUS_FILE_LIMIT + 1)
+        logger.info("Using estimated file count for large repo",
+                    owner=owner, repo=repo_name, estimated=file_count)
+
+    elif count_error:
+        logger.warning("Could not count files", owner=owner, repo=repo_name, error=count_error)
+        # Fall back to size-based estimate
+        repo_size_kb = metadata.get("size", 0)
+        file_count = max(repo_size_kb // 3, 1)
+
+    # Build response
+    response_time_ms = int((time.time() - start_time) * 1000)
+
+    if file_count > ANONYMOUS_FILE_LIMIT:
+        result = {
+            "valid": True,
+            "repo_name": repo_name,
+            "owner": owner,
+            "is_public": True,
+            "default_branch": default_branch,
+            "file_count": file_count,
+            "size_kb": metadata.get("size", 0),
+            "language": metadata.get("language"),
+            "stars": metadata.get("stargazers_count", 0),
+            "can_index": False,
+            "reason": "too_large",
+            "message": f"Repository has {file_count:,} code files. "
+                       f"Anonymous limit is {ANONYMOUS_FILE_LIMIT}.",
+            "limit": ANONYMOUS_FILE_LIMIT,
+            "response_time_ms": response_time_ms,
+        }
+    else:
+        result = {
+            "valid": True,
+            "repo_name": repo_name,
+            "owner": owner,
+            "is_public": True,
+            "default_branch": default_branch,
+            "file_count": file_count,
+            "size_kb": metadata.get("size", 0),
+            "language": metadata.get("language"),
+            "stars": metadata.get("stargazers_count", 0),
+            "can_index": True,
+            "message": "Ready to index",
+            "response_time_ms": response_time_ms,
+        }
+
+    # Cache successful validations
+    if cache:
+        cache.set(cache_key, result, ttl=VALIDATION_CACHE_TTL)
+
+    logger.info("Validated GitHub repo",
+                owner=owner, repo=repo_name,
+                file_count=file_count, can_index=result["can_index"],
+                response_time_ms=response_time_ms)
+
+    return result
