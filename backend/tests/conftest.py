@@ -52,14 +52,39 @@ def mock_pinecone():
 
 @pytest.fixture(scope="session", autouse=True)  
 def mock_redis():
-    """Mock Redis client globally"""
+    """
+    Mock Redis client globally.
+    
+    Includes hash operations for session management (#127).
+    """
     with patch('redis.Redis') as mock:
         redis_instance = MagicMock()
+        
+        # Connection
         redis_instance.ping.return_value = True
+        
+        # String operations (legacy + IP/global limits)
         redis_instance.get.return_value = None
         redis_instance.set.return_value = True
         redis_instance.incr.return_value = 1
+        redis_instance.delete.return_value = 1
+        
+        # TTL operations
         redis_instance.expire.return_value = True
+        redis_instance.ttl.return_value = 86400
+        
+        # Hash operations (session management #127)
+        redis_instance.type.return_value = b'hash'
+        redis_instance.hset.return_value = 1
+        redis_instance.hget.return_value = b'0'
+        redis_instance.hgetall.return_value = {
+            b'searches_used': b'0',
+            b'created_at': b'2025-12-24T10:00:00Z',
+        }
+        redis_instance.hincrby.return_value = 1
+        redis_instance.hexists.return_value = False
+        redis_instance.hdel.return_value = 1
+        
         mock.return_value = redis_instance
         yield mock
 
