@@ -56,6 +56,47 @@ class CacheService:
         hash_input = ":".join(parts)
         hash_val = hashlib.md5(hash_input.encode()).hexdigest()[:12]
         return f"{prefix}:{hash_val}"
+
+    def get(self, key: str) -> Optional[Dict]:
+        """
+        Get value by key (generic cache access).
+        
+        Used for arbitrary key-value caching like repo validation results.
+        """
+        if not self.redis:
+            return None
+        
+        try:
+            cached = self.redis.get(key)
+            if cached:
+                metrics.increment("cache_hits")
+                return json.loads(cached)
+            metrics.increment("cache_misses")
+        except Exception as e:
+            logger.error("Cache read error", operation="get", key=key[:50], error=str(e))
+            metrics.increment("cache_errors")
+        
+        return None
+
+    def set(self, key: str, value: Dict, ttl: int = 300) -> bool:
+        """
+        Set value by key (generic cache access).
+        
+        Used for arbitrary key-value caching like repo validation results.
+        Default TTL is 5 minutes.
+        
+        Returns True if successful, False otherwise.
+        """
+        if not self.redis:
+            return False
+        
+        try:
+            self.redis.setex(key, ttl, json.dumps(value))
+            return True
+        except Exception as e:
+            logger.error("Cache write error", operation="set", key=key[:50], error=str(e))
+            metrics.increment("cache_errors")
+            return False
     
     def get_search_results(self, query: str, repo_id: str) -> Optional[List[Dict]]:
         """Get cached search results"""
