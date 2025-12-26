@@ -10,7 +10,7 @@ import os
 import re
 import httpx
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response, BackgroundTasks
 from pydantic import BaseModel, field_validator
 import time
 
@@ -19,6 +19,10 @@ from services.input_validator import InputValidator
 from services.repo_validator import RepoValidator
 from services.observability import logger
 from services.playground_limiter import PlaygroundLimiter, get_playground_limiter
+from services.anonymous_indexer import (
+    AnonymousIndexingJob,
+    run_indexing_job,
+)
 
 router = APIRouter(prefix="/playground", tags=["Playground"])
 
@@ -54,6 +58,30 @@ class ValidateRepoRequest(BaseModel):
     @classmethod
     def validate_github_url_format(cls, v: str) -> str:
         """Basic URL format validation."""
+        v = v.strip()
+        if not v:
+            raise ValueError("GitHub URL is required")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        if "github.com" not in v.lower():
+            raise ValueError("URL must be a GitHub repository URL")
+        return v
+
+
+class IndexRepoRequest(BaseModel):
+    """
+    Request body for anonymous repository indexing.
+
+    Used by POST /playground/index endpoint (#125).
+    """
+    github_url: str
+    branch: Optional[str] = None  # None = use repo's default branch
+    partial: bool = False  # If True, index first 200 files of large repos
+
+    @field_validator("github_url")
+    @classmethod
+    def validate_github_url_format(cls, v: str) -> str:
+        """Basic URL format validation (detailed validation in endpoint)."""
         v = v.strip()
         if not v:
             raise ValueError("GitHub URL is required")
@@ -455,8 +483,9 @@ async def _count_code_files(
         except httpx.TimeoutException:
             return 0, "GitHub API request timed out"
         except Exception as e:
+            # Log detailed error server-side, but don't expose to client
             logger.error("GitHub tree API failed", error=str(e))
-            return 0, str(e)
+            return 0, "error"
 
 
 @router.post("/validate-repo")
@@ -591,3 +620,406 @@ async def validate_github_repo(request: ValidateRepoRequest, req: Request):
                 response_time_ms=response_time_ms)
 
     return result
+
+
+# =============================================================================
+# Anonymous Indexing Endpoint (#125)
+# =============================================================================
+
+@router.post("/index", status_code=202)
+async def start_anonymous_indexing(
+    request: IndexRepoRequest,
+    req: Request,
+    response: Response,
+    background_tasks: BackgroundTasks
+):
+    """
+    Start indexing a public GitHub repository for anonymous users.
+
+    This endpoint validates the repository and queues it for indexing.
+    Returns a job_id that can be used to poll for status via GET /index/{job_id}.
+
+    Constraints:
+    - Max 200 code files (anonymous limit)
+    - 1 repo per session (no concurrent indexing)
+    - Public repos only
+    - 24hr TTL on indexed data
+
+    See issue #125 for full specification.
+    """
+    start_time = time.time()
+    limiter = _get_limiter()
+
+    # --- Step 1: Session validation (get existing or create new) ---
+    session_token = _get_session_token(req)
+    client_ip = _get_client_ip(req)
+
+    if not session_token:
+        # Create new session - generate token first, then create session
+        session_token = limiter._generate_session_token()
+        limiter.create_session(session_token)
+        _set_session_cookie(response, session_token)
+        logger.info("Created new session for indexing",
+                    session_token=session_token[:8],
+                    client_ip=client_ip)
+
+    # --- Step 2: Check if session already has an indexed repo ---
+    session_data = limiter.get_session_data(session_token)
+
+    if session_data.indexed_repo:
+        # Check if the existing repo has expired
+        from datetime import datetime, timezone
+
+        expires_at_str = session_data.indexed_repo.get("expires_at", "")
+        is_expired = False
+
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                is_expired = datetime.now(timezone.utc) > expires_at
+            except (ValueError, AttributeError):
+                is_expired = True  # Treat parse errors as expired
+
+        if not is_expired:
+            # Session already has a valid indexed repo - return 409 Conflict
+            logger.info("Session already has indexed repo",
+                        session_token=session_token[:8],
+                        existing_repo=session_data.indexed_repo.get("repo_id"))
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "already_indexed",
+                    "message": "You already have an indexed repository. "
+                               "Only 1 repo per session allowed.",
+                    "indexed_repo": session_data.indexed_repo
+                }
+            )
+        else:
+            # Existing repo expired - allow new indexing
+            logger.info("Existing indexed repo expired, allowing new indexing",
+                        session_token=session_token[:8])
+
+    # --- Step 3: Validate GitHub URL (reuse existing logic) ---
+    owner, repo_name, parse_error = _parse_github_url(request.github_url)
+    if parse_error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "reason": "invalid_url",
+                "message": parse_error
+            }
+        )
+
+    # Fetch repo metadata from GitHub
+    metadata = await _fetch_repo_metadata(owner, repo_name)
+
+    if "error" in metadata:
+        error_type = metadata["error"]
+        if error_type == "not_found":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "validation_failed",
+                    "reason": "not_found",
+                    "message": "Repository not found. Check the URL or ensure it's public."
+                }
+            )
+        elif error_type == "rate_limited":
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "github_rate_limit",
+                    "message": "GitHub API rate limit exceeded. Try again later."
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "github_error",
+                    "message": metadata.get("message", "Failed to fetch repository info")
+                }
+            )
+
+    # Check if private
+    if metadata.get("private", False):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "reason": "private",
+                "message": "This repository is private. "
+                           "Anonymous indexing only supports public repositories."
+            }
+        )
+
+    # Determine branch
+    branch = request.branch or metadata.get("default_branch", "main")
+
+    # Get file count
+    file_count, count_error = await _count_code_files(owner, repo_name, branch)
+
+    # Handle truncated tree (very large repo)
+    if count_error == "truncated":
+        repo_size_kb = metadata.get("size", 0)
+        file_count = max(repo_size_kb // 3, ANONYMOUS_FILE_LIMIT + 1)
+    elif count_error:
+        repo_size_kb = metadata.get("size", 0)
+        file_count = max(repo_size_kb // 3, 1)
+
+    # Check file limit
+    is_partial = False
+    files_to_index = file_count
+
+    if file_count > ANONYMOUS_FILE_LIMIT:
+        if request.partial:
+            # Partial indexing - cap at limit
+            is_partial = True
+            files_to_index = ANONYMOUS_FILE_LIMIT
+            logger.info("Partial indexing enabled",
+                        total_files=file_count,
+                        indexing=files_to_index)
+        else:
+            # Reject large repos without partial flag
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "validation_failed",
+                    "reason": "too_large",
+                    "message": f"Repository has {file_count:,} code files. "
+                               f"Anonymous limit is {ANONYMOUS_FILE_LIMIT}. "
+                               f"Use partial=true to index first {ANONYMOUS_FILE_LIMIT} files.",
+                    "file_count": file_count,
+                    "limit": ANONYMOUS_FILE_LIMIT,
+                    "hint": "Set partial=true to index a subset of files"
+                }
+            )
+
+    # --- Validation passed! Create job and start background indexing ---
+
+    response_time_ms = int((time.time() - start_time) * 1000)
+
+    # Initialize job manager
+    job_manager = AnonymousIndexingJob(redis_client)
+    job_id = job_manager.generate_job_id()
+
+    # Create job in Redis
+    job_manager.create_job(
+        job_id=job_id,
+        session_id=session_token,
+        github_url=request.github_url,
+        owner=owner,
+        repo_name=repo_name,
+        branch=branch,
+        file_count=file_count,
+        is_partial=is_partial,
+        max_files=files_to_index
+    )
+
+    # Queue background task
+    background_tasks.add_task(
+        run_indexing_job,
+        job_manager=job_manager,
+        indexer=indexer,
+        limiter=limiter,
+        job_id=job_id,
+        session_id=session_token,
+        github_url=request.github_url,
+        owner=owner,
+        repo_name=repo_name,
+        branch=branch,
+        file_count=files_to_index,  # Actual files to index (may be capped)
+        max_files=files_to_index if is_partial else None  # Limit for partial indexing
+    )
+
+    logger.info("Indexing job queued",
+                job_id=job_id,
+                owner=owner,
+                repo=repo_name,
+                branch=branch,
+                file_count=files_to_index,
+                is_partial=is_partial,
+                session_token=session_token[:8],
+                response_time_ms=response_time_ms)
+
+    # Estimate time based on file count (~0.3s per file)
+    estimated_seconds = max(10, int(files_to_index * 0.3))
+
+    response_data = {
+        "job_id": job_id,
+        "status": "queued",
+        "estimated_time_seconds": estimated_seconds,
+        "file_count": files_to_index,
+        "message": f"Indexing started. Poll /playground/index/{job_id} for status."
+    }
+
+    # Add partial info if applicable
+    if is_partial:
+        response_data["partial"] = True
+        response_data["total_files"] = file_count
+        response_data["message"] = (
+            f"Partial indexing started ({files_to_index} of {file_count} files). "
+            f"Poll /playground/index/{job_id} for status."
+        )
+
+    return response_data
+
+
+# =============================================================================
+# GET /playground/index/{job_id} - Check indexing job status (#126)
+# =============================================================================
+
+@router.get(
+    "/index/{job_id}",
+    summary="Check indexing job status",
+    description="Poll this endpoint to check the status of an indexing job.",
+    responses={
+        200: {
+            "description": "Job status",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "queued": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "queued",
+                                "message": "Job is queued for processing"
+                            }
+                        },
+                        "processing": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "processing",
+                                "progress": {
+                                    "files_processed": 50,
+                                    "files_total": 100,
+                                    "functions_found": 250,
+                                    "percent_complete": 50
+                                }
+                            }
+                        },
+                        "completed": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "completed",
+                                "repo_id": "anon_idx_abc123",
+                                "stats": {
+                                    "files_indexed": 100,
+                                    "functions_found": 500,
+                                    "time_taken_seconds": 45.2
+                                }
+                            }
+                        },
+                        "failed": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "failed",
+                                "error": "clone_failed",
+                                "error_message": "Repository not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {"description": "Job not found or expired"}
+    }
+)
+async def get_indexing_status(
+    job_id: str,
+    req: Request
+):
+    """
+    Check the status of an anonymous indexing job.
+
+    Poll this endpoint after starting an indexing job to track progress.
+    Jobs expire after 1 hour.
+
+    Status values:
+    - queued: Job is waiting to start
+    - cloning: Repository is being cloned
+    - processing: Files are being indexed
+    - completed: Indexing finished successfully
+    - failed: Indexing failed (check error field)
+    """
+    # Validate job_id format
+    if not job_id or not job_id.startswith("idx_"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_job_id",
+                "message": "Invalid job ID format"
+            }
+        )
+
+    # Get job from Redis
+    job_manager = AnonymousIndexingJob(redis_client)
+    job = job_manager.get_job(job_id)
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "job_not_found",
+                "message": "Job not found or has expired. Jobs expire after 1 hour."
+            }
+        )
+
+    # Build response based on status
+    status = job.get("status", "unknown")
+    response = {
+        "job_id": job_id,
+        "status": status,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+    # Add repo info
+    response["repository"] = {
+        "owner": job.get("owner"),
+        "name": job.get("repo_name"),
+        "branch": job.get("branch"),
+        "github_url": job.get("github_url"),
+    }
+
+    # Add partial info if applicable
+    if job.get("is_partial"):
+        response["partial"] = True
+        response["max_files"] = job.get("max_files")
+
+    # Status-specific fields
+    if status == "queued":
+        response["message"] = "Job is queued for processing"
+
+    elif status == "cloning":
+        response["message"] = "Cloning repository..."
+
+    elif status == "processing":
+        response["message"] = "Indexing files..."
+        if job.get("progress"):
+            progress = job["progress"]
+            files_processed = progress.get("files_processed", 0)
+            files_total = progress.get("files_total", 1)
+            percent = round((files_processed / files_total) * 100) if files_total > 0 else 0
+            response["progress"] = {
+                "files_processed": files_processed,
+                "files_total": files_total,
+                "functions_found": progress.get("functions_found", 0),
+                "percent_complete": percent,
+                "current_file": progress.get("current_file")
+            }
+
+    elif status == "completed":
+        response["message"] = "Indexing completed successfully"
+        response["repo_id"] = job.get("repo_id")
+        if job.get("stats"):
+            response["stats"] = job["stats"]
+
+    elif status == "failed":
+        response["message"] = job.get("error_message", "Indexing failed")
+        response["error"] = job.get("error", "unknown_error")
+        response["error_message"] = job.get("error_message")
+
+    return response

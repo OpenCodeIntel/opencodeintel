@@ -464,17 +464,30 @@ class OptimizedCodeIndexer:
             return f"Error: {str(e)}"
 
     async def index_repository_with_progress(
-        self, 
-        repo_id: str, 
+        self,
+        repo_id: str,
         repo_path: str,
-        progress_callback
+        progress_callback,
+        max_files: int = None
     ):
-        """Index repository with real-time progress updates"""
+        """Index repository with real-time progress updates
+
+        Args:
+            max_files: If set, limit indexing to first N files (for partial indexing)
+        """
         start_time = time.time()
         logger.info("Starting optimized indexing with progress", repo_id=repo_id)
-        
+
         # Discover code files
         code_files = self._discover_code_files(repo_path)
+
+        # Apply file limit if specified (partial indexing)
+        if max_files and len(code_files) > max_files:
+            logger.info("Limiting files for partial indexing",
+                        total_discovered=len(code_files),
+                        max_files=max_files)
+            code_files = code_files[:max_files]
+
         total_files = len(code_files)
         logger.info("Found code files", repo_id=repo_id, total_files=total_files)
         
