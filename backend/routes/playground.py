@@ -483,8 +483,9 @@ async def _count_code_files(
         except httpx.TimeoutException:
             return 0, "GitHub API request timed out"
         except Exception as e:
+            # Log detailed error server-side, but don't expose to client
             logger.error("GitHub tree API failed", error=str(e))
-            return 0, str(e)
+            return 0, "error"
 
 
 @router.post("/validate-repo")
