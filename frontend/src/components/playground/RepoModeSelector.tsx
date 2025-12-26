@@ -1,6 +1,8 @@
 /**
  * RepoModeSelector
- * Tab toggle between Demo repos and User's own repo
+ * 
+ * Tab toggle between Demo repos and User's custom repo.
+ * Used at the top of the Playground to switch input modes.
  */
 
 import { cn } from '@/lib/utils';
@@ -13,10 +15,22 @@ interface RepoModeSelectorProps {
   disabled?: boolean;
 }
 
-export function RepoModeSelector({ mode, onModeChange, disabled }: RepoModeSelectorProps) {
+export function RepoModeSelector({ 
+  mode, 
+  onModeChange, 
+  disabled = false 
+}: RepoModeSelectorProps) {
   return (
-    <div className="inline-flex items-center rounded-lg bg-zinc-900 p-1 border border-zinc-800">
+    <div 
+      className="inline-flex items-center rounded-lg bg-zinc-900 p-1 border border-zinc-800"
+      role="tablist"
+      aria-label="Repository source"
+    >
       <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'demo'}
+        aria-controls="demo-panel"
         onClick={() => onModeChange('demo')}
         disabled={disabled}
         className={cn(
@@ -30,6 +44,10 @@ export function RepoModeSelector({ mode, onModeChange, disabled }: RepoModeSelec
         Demo Repos
       </button>
       <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'custom'}
+        aria-controls="custom-panel"
         onClick={() => onModeChange('custom')}
         disabled={disabled}
         className={cn(

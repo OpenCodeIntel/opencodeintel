@@ -1,6 +1,7 @@
 /**
  * Playground API Service
- * Handles all anonymous indexing API calls
+ * 
+ * Handles all anonymous indexing API calls.
  * 
  * Endpoints:
  * - POST /playground/validate-repo  (BLOCKED by #134 - using mock)
@@ -89,6 +90,30 @@ export interface SearchResponse {
   limit: number;
 }
 
+// ============ Error Classes ============
+
+export class APIError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'APIError';
+  }
+}
+
+// ============ Helpers ============
+
+async function parseErrorResponse(response: Response): Promise<string> {
+  try {
+    const data = await response.json();
+    return data.detail?.message || data.detail || data.message || 'Request failed';
+  } catch {
+    return `Request failed with status ${response.status}`;
+  }
+}
+
 // ============ API Client ============
 
 class PlaygroundAPI {
@@ -99,12 +124,17 @@ class PlaygroundAPI {
   }
 
   /**
-   * Validate a GitHub repo URL before indexing
+   * Validate a GitHub repo URL before indexing.
+   * 
+   * @param githubUrl - Full GitHub URL (e.g., https://github.com/owner/repo)
+   * @returns Validation result with repo metadata
+   * @throws APIError on failure
+   * 
    * NOTE: Currently mocked due to Bug #134 (CacheService missing get/set)
    */
   async validateRepo(githubUrl: string): Promise<ValidationResult> {
     // TODO: Remove mock when #134 is fixed
-    const USE_MOCK = true; // Flip to false when backend is ready
+    const USE_MOCK = true;
     
     if (USE_MOCK) {
       return this.mockValidateRepo(githubUrl);
@@ -118,22 +148,23 @@ class PlaygroundAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail?.message || 'Validation failed');
+      const message = await parseErrorResponse(response);
+      throw new APIError(message, response.status);
     }
 
     return response.json();
   }
 
   /**
-   * Mock validation until Bug #134 is fixed
+   * Mock validation for development until Bug #134 is fixed.
+   * Simulates realistic validation responses.
    */
   private async mockValidateRepo(githubUrl: string): Promise<ValidationResult> {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 800));
+    // Simulate network latency
+    await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 400));
 
-    // Parse URL to extract owner/repo
-    const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+    // Parse URL
+    const match = githubUrl.match(/github\.com\/([^/]+)\/([^/\s?#]+)/);
     if (!match) {
       return {
         can_index: false,
@@ -151,21 +182,55 @@ class PlaygroundAPI {
     const [, owner, repo] = match;
     const repoName = repo.replace(/\.git$/, '');
 
-    // Mock successful validation
+    // Detect language from common repo names
+    const language = this.detectLanguage(repoName, owner);
+    const fileCount = 50 + Math.floor(Math.random() * 250);
+
     return {
       can_index: true,
       repo_name: repoName,
       owner,
-      file_count: Math.floor(Math.random() * 300) + 50,
+      file_count: fileCount,
       stars: Math.floor(Math.random() * 50000),
-      language: 'Python',
+      language,
       default_branch: 'main',
-      estimated_time_seconds: Math.floor(Math.random() * 30) + 10,
+      estimated_time_seconds: Math.ceil(fileCount / 10),
     };
   }
 
   /**
-   * Start indexing a repository
+   * Simple language detection based on repo/owner name patterns.
+   */
+  private detectLanguage(repo: string, owner: string): string {
+    const name = `${owner}/${repo}`.toLowerCase();
+    
+    if (name.includes('flask') || name.includes('django') || name.includes('fastapi')) {
+      return 'Python';
+    }
+    if (name.includes('express') || name.includes('next') || name.includes('react')) {
+      return 'TypeScript';
+    }
+    if (name.includes('rails') || name.includes('ruby')) {
+      return 'Ruby';
+    }
+    if (name.includes('spring') || name.includes('java')) {
+      return 'Java';
+    }
+    if (name.includes('gin') || name.includes('echo')) {
+      return 'Go';
+    }
+    
+    // Random fallback
+    const languages = ['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust'];
+    return languages[Math.floor(Math.random() * languages.length)];
+  }
+
+  /**
+   * Start indexing a repository.
+   * 
+   * @param githubUrl - Full GitHub URL
+   * @returns Job info with job_id for polling
+   * @throws APIError on failure (409 if already indexed)
    */
   async startIndexing(githubUrl: string): Promise<IndexingJob> {
     const response = await fetch(`${this.baseUrl}/index`, {
@@ -176,18 +241,18 @@ class PlaygroundAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      if (response.status === 409) {
-        throw new Error(error.detail?.message || 'Already have an indexed repo');
-      }
-      throw new Error(error.detail?.message || 'Failed to start indexing');
+      const message = await parseErrorResponse(response);
+      throw new APIError(message, response.status, response.status === 409 ? 'ALREADY_INDEXED' : undefined);
     }
 
     return response.json();
   }
 
   /**
-   * Poll indexing job status
+   * Poll indexing job status.
+   * 
+   * @param jobId - Job ID from startIndexing
+   * @returns Current job status with progress
    */
   async getIndexingStatus(jobId: string): Promise<IndexingJob> {
     const response = await fetch(`${this.baseUrl}/index/${jobId}`, {
@@ -195,15 +260,15 @@ class PlaygroundAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail?.message || 'Failed to get status');
+      const message = await parseErrorResponse(response);
+      throw new APIError(message, response.status);
     }
 
     return response.json();
   }
 
   /**
-   * Get current session data
+   * Get current session data including indexed repo and search limits.
    */
   async getSession(): Promise<SessionData> {
     const response = await fetch(`${this.baseUrl}/session`, {
@@ -211,15 +276,20 @@ class PlaygroundAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail?.message || 'Failed to get session');
+      const message = await parseErrorResponse(response);
+      throw new APIError(message, response.status);
     }
 
     return response.json();
   }
 
   /**
-   * Search in indexed repo
+   * Search in indexed repository.
+   * 
+   * @param query - Natural language search query
+   * @param repoId - Repository ID from session
+   * @param maxResults - Maximum results to return (default: 10)
+   * @throws APIError on failure (429 if rate limited)
    */
   async search(query: string, repoId: string, maxResults = 10): Promise<SearchResponse> {
     const response = await fetch(`${this.baseUrl}/search`, {
@@ -234,11 +304,12 @@ class PlaygroundAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      if (response.status === 429) {
-        throw new Error('Daily search limit reached');
-      }
-      throw new Error(error.detail?.message || 'Search failed');
+      const message = await parseErrorResponse(response);
+      throw new APIError(
+        response.status === 429 ? 'Daily search limit reached' : message,
+        response.status,
+        response.status === 429 ? 'RATE_LIMITED' : undefined
+      );
     }
 
     return response.json();

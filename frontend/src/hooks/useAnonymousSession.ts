@@ -1,16 +1,22 @@
 /**
  * useAnonymousSession Hook
- * State machine for anonymous repo indexing flow
  * 
- * States: idle → validating → valid/invalid → indexing → ready/error
+ * State machine for anonymous repo indexing flow.
+ * Manages validation, indexing progress, and session state.
+ * 
+ * @example
+ * ```tsx
+ * const { state, validateUrl, startIndexing, reset } = useAnonymousSession();
+ * 
+ * // State machine: idle → validating → valid/invalid → indexing → ready/error
+ * ```
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   playgroundAPI, 
-  ValidationResult, 
-  IndexingJob, 
-  SessionData 
+  type ValidationResult, 
+  type SessionData 
 } from '../services/playground-api';
 
 // ============ State Types ============
@@ -77,7 +83,7 @@ export type PlaygroundState =
 
 // ============ Hook Return Type ============
 
-interface UseAnonymousSessionReturn {
+export interface UseAnonymousSessionReturn {
   state: PlaygroundState;
   session: SessionData | null;
   validateUrl: (url: string) => Promise<void>;
@@ -86,34 +92,37 @@ interface UseAnonymousSessionReturn {
   isLoading: boolean;
 }
 
+// ============ Constants ============
+
+const POLLING_INTERVAL_MS = 2000;
+
 // ============ Hook Implementation ============
 
 export function useAnonymousSession(): UseAnonymousSessionReturn {
   const [state, setState] = useState<PlaygroundState>({ status: 'idle' });
   const [session, setSession] = useState<SessionData | null>(null);
   
-  // Polling refs
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // Refs for cleanup and race condition handling
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUrlRef = useRef<string>('');
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Cleanup polling on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
       }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
-  }, []);
-
-  // Check for existing session on mount
-  useEffect(() => {
-    checkExistingSession();
   }, []);
 
   /**
    * Check if user already has an indexed repo in session
    */
-  const checkExistingSession = async () => {
+  const checkExistingSession = useCallback(async () => {
     try {
       const sessionData = await playgroundAPI.getSession();
       setSession(sessionData);
@@ -125,15 +134,87 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
           repoName: sessionData.indexed_repo.name,
           owner: sessionData.indexed_repo.owner || '',
           fileCount: sessionData.indexed_repo.file_count,
-          functionsFound: 0, // Not stored in session
+          functionsFound: 0,
           expiresAt: sessionData.indexed_repo.expires_at,
         });
       }
-    } catch (error) {
-      // No session yet, that's fine
-      console.log('No existing session');
+    } catch {
+      // No session yet - this is expected for new users
     }
-  };
+  }, []);
+
+  // Check for existing session on mount
+  useEffect(() => {
+    checkExistingSession();
+  }, [checkExistingSession]);
+
+  /**
+   * Poll for indexing job status
+   */
+  const startPolling = useCallback((jobId: string, url: string) => {
+    // Clear any existing polling
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+    }
+
+    const poll = async () => {
+      try {
+        const status = await playgroundAPI.getIndexingStatus(jobId);
+
+        if (status.status === 'completed') {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+
+          const sessionData = await playgroundAPI.getSession();
+          setSession(sessionData);
+
+          setState({
+            status: 'ready',
+            repoId: status.repo_id!,
+            repoName: status.repository?.name || '',
+            owner: status.repository?.owner || '',
+            fileCount: status.stats?.files_indexed || 0,
+            functionsFound: status.stats?.functions_found || 0,
+            expiresAt: sessionData.indexed_repo?.expires_at || '',
+          });
+        } else if (status.status === 'failed') {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+
+          setState({
+            status: 'error',
+            message: status.error || 'Indexing failed',
+            canRetry: true,
+          });
+        } else {
+          // Update progress
+          setState({
+            status: 'indexing',
+            url,
+            jobId,
+            progress: {
+              percent: status.progress?.percent_complete || 0,
+              filesProcessed: status.progress?.files_processed || 0,
+              filesTotal: status.progress?.files_total || 0,
+              currentFile: status.progress?.current_file,
+              functionsFound: status.progress?.functions_found || 0,
+            },
+          });
+        }
+      } catch (error) {
+        // Log but don't stop polling on transient errors
+        console.error('Polling error:', error);
+      }
+    };
+
+    // Poll immediately, then at interval
+    poll();
+    pollingRef.current = setInterval(poll, POLLING_INTERVAL_MS);
+  }, []);
 
   /**
    * Validate a GitHub URL
@@ -144,21 +225,23 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
       return;
     }
 
+    // Cancel any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     currentUrlRef.current = url;
     setState({ status: 'validating', url });
 
     try {
       const validation = await playgroundAPI.validateRepo(url);
 
-      // Check if URL changed while we were validating
+      // Ignore if URL changed during validation
       if (currentUrlRef.current !== url) return;
 
       if (validation.can_index) {
-        setState({
-          status: 'valid',
-          url,
-          validation,
-        });
+        setState({ status: 'valid', url, validation });
       } else {
         setState({
           status: 'invalid',
@@ -168,6 +251,8 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
         });
       }
     } catch (error) {
+      // Ignore abort errors
+      if (error instanceof Error && error.name === 'AbortError') return;
       if (currentUrlRef.current !== url) return;
       
       setState({
@@ -204,7 +289,6 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
         },
       });
 
-      // Start polling for status
       startPolling(job.job_id, url);
     } catch (error) {
       setState({
@@ -213,78 +297,7 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
         canRetry: true,
       });
     }
-  }, [state]);
-
-  /**
-   * Poll for indexing status
-   */
-  const startPolling = (jobId: string, url: string) => {
-    // Clear any existing polling
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-    }
-
-    const poll = async () => {
-      try {
-        const status = await playgroundAPI.getIndexingStatus(jobId);
-
-        if (status.status === 'completed') {
-          // Stop polling
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-
-          // Refresh session data
-          const sessionData = await playgroundAPI.getSession();
-          setSession(sessionData);
-
-          setState({
-            status: 'ready',
-            repoId: status.repo_id!,
-            repoName: status.repository?.name || '',
-            owner: status.repository?.owner || '',
-            fileCount: status.stats?.files_indexed || 0,
-            functionsFound: status.stats?.functions_found || 0,
-            expiresAt: sessionData.indexed_repo?.expires_at || '',
-          });
-        } else if (status.status === 'failed') {
-          // Stop polling
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-
-          setState({
-            status: 'error',
-            message: status.error || 'Indexing failed',
-            canRetry: true,
-          });
-        } else {
-          // Update progress
-          setState({
-            status: 'indexing',
-            url,
-            jobId,
-            progress: {
-              percent: status.progress?.percent_complete || 0,
-              filesProcessed: status.progress?.files_processed || 0,
-              filesTotal: status.progress?.files_total || 0,
-              currentFile: status.progress?.current_file,
-              functionsFound: status.progress?.functions_found || 0,
-            },
-          });
-        }
-      } catch (error) {
-        console.error('Polling error:', error);
-        // Don't stop polling on transient errors
-      }
-    };
-
-    // Poll immediately, then every 2 seconds
-    poll();
-    pollingRef.current = setInterval(poll, 2000);
-  };
+  }, [state, startPolling]);
 
   /**
    * Reset to idle state
@@ -294,11 +307,14 @@ export function useAnonymousSession(): UseAnonymousSessionReturn {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     currentUrlRef.current = '';
     setState({ status: 'idle' });
   }, []);
 
-  // Computed loading state
   const isLoading = state.status === 'validating' || state.status === 'indexing';
 
   return {

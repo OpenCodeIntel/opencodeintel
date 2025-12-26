@@ -2,7 +2,7 @@
  * Services barrel export
  */
 
-export { playgroundAPI } from './playground-api';
+export { playgroundAPI, APIError } from './playground-api';
 export type { 
   ValidationResult, 
   IndexingJob, 
