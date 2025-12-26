@@ -1004,7 +1004,20 @@ async def start_anonymous_indexing(
 @router.get(
     "/index/{job_id}",
     summary="Check indexing job status",
-    description="Poll this endpoint to check the status of an indexing job.",
+    description="""
+Poll this endpoint to check the status of an anonymous indexing job.
+
+**Status values:**
+- `queued` - Job is waiting to start
+- `cloning` - Repository is being cloned from GitHub
+- `processing` - Files are being parsed and indexed
+- `completed` - Indexing finished, `repo_id` available for search
+- `failed` - Error occurred, check `error` and `error_message` fields
+
+**Polling recommendation:** Every 2-3 seconds until completed/failed.
+
+**TTL:** Job metadata expires after 1 hour.
+""",
     responses={
         200: {
             "description": "Job status",
@@ -1012,29 +1025,100 @@ async def start_anonymous_indexing(
                 "application/json": {
                     "examples": {
                         "queued": {
+                            "summary": "Job queued",
                             "value": {
                                 "job_id": "idx_abc123",
                                 "status": "queued",
-                                "message": "Job is queued for processing"
+                                "message": "Job is queued for processing",
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:00:00Z",
+                                "repository": {
+                                    "owner": "pallets",
+                                    "name": "flask",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/pallets/flask"
+                                }
+                            }
+                        },
+                        "cloning": {
+                            "summary": "Cloning repository",
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "cloning",
+                                "message": "Cloning repository...",
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:00:05Z",
+                                "repository": {
+                                    "owner": "pallets",
+                                    "name": "flask",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/pallets/flask"
+                                }
                             }
                         },
                         "processing": {
+                            "summary": "Indexing in progress",
                             "value": {
                                 "job_id": "idx_abc123",
                                 "status": "processing",
+                                "message": "Indexing files...",
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:00:30Z",
+                                "repository": {
+                                    "owner": "pallets",
+                                    "name": "flask",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/pallets/flask"
+                                },
                                 "progress": {
                                     "files_processed": 50,
                                     "files_total": 100,
                                     "functions_found": 250,
-                                    "percent_complete": 50
+                                    "percent_complete": 50,
+                                    "current_file": "src/flask/app.py"
+                                }
+                            }
+                        },
+                        "processing_partial": {
+                            "summary": "Partial indexing in progress",
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "processing",
+                                "message": "Indexing files...",
+                                "partial": True,
+                                "max_files": 200,
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:00:30Z",
+                                "repository": {
+                                    "owner": "facebook",
+                                    "name": "react",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/facebook/react"
+                                },
+                                "progress": {
+                                    "files_processed": 100,
+                                    "files_total": 200,
+                                    "functions_found": 450,
+                                    "percent_complete": 50,
+                                    "current_file": "packages/react/src/React.js"
                                 }
                             }
                         },
                         "completed": {
+                            "summary": "Indexing completed",
                             "value": {
                                 "job_id": "idx_abc123",
                                 "status": "completed",
+                                "message": "Indexing completed successfully",
                                 "repo_id": "anon_idx_abc123",
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:01:00Z",
+                                "repository": {
+                                    "owner": "pallets",
+                                    "name": "flask",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/pallets/flask"
+                                },
                                 "stats": {
                                     "files_indexed": 100,
                                     "functions_found": 500,
@@ -1043,18 +1127,53 @@ async def start_anonymous_indexing(
                             }
                         },
                         "failed": {
+                            "summary": "Indexing failed",
                             "value": {
                                 "job_id": "idx_abc123",
                                 "status": "failed",
+                                "message": "Repository not found or access denied",
                                 "error": "clone_failed",
-                                "error_message": "Repository not found"
+                                "error_message": "Repository not found or access denied",
+                                "created_at": "2025-12-26T10:00:00Z",
+                                "updated_at": "2025-12-26T10:00:10Z",
+                                "repository": {
+                                    "owner": "user",
+                                    "name": "private-repo",
+                                    "branch": "main",
+                                    "github_url": "https://github.com/user/private-repo"
+                                }
                             }
                         }
                     }
                 }
             }
         },
-        404: {"description": "Job not found or expired"}
+        400: {
+            "description": "Invalid job ID format",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "invalid_job_id",
+                            "message": "Invalid job ID format"
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Job not found or expired",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "job_not_found",
+                            "message": "Job not found or has expired. Jobs expire after 1 hour."
+                        }
+                    }
+                }
+            }
+        }
     }
 )
 async def get_indexing_status(
