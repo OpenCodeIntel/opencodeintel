@@ -18,7 +18,7 @@ from dependencies import indexer, cache, repo_manager, redis_client
 from services.input_validator import InputValidator
 from services.repo_validator import RepoValidator
 from services.observability import logger
-from services.playground_limiter import PlaygroundLimiter, get_playground_limiter
+from services.playground_limiter import PlaygroundLimiter, get_playground_limiter, IndexedRepoData
 from services.anonymous_indexer import (
     AnonymousIndexingJob,
     run_indexing_job,
@@ -46,7 +46,8 @@ VALIDATION_CACHE_TTL = 300  # 5 minutes
 
 class PlaygroundSearchRequest(BaseModel):
     query: str
-    demo_repo: str = "flask"
+    demo_repo: Optional[str] = None  # Keep for backward compat
+    repo_id: Optional[str] = None    # Direct repo_id (user-indexed repos)
     max_results: int = 10
 
 
@@ -141,6 +142,145 @@ def _set_session_cookie(response: Response, token: str):
 def _get_limiter() -> PlaygroundLimiter:
     """Get the playground limiter instance."""
     return get_playground_limiter(redis_client)
+
+
+def _resolve_repo_id(
+    request: PlaygroundSearchRequest,
+    limiter: PlaygroundLimiter,
+    limit_result,
+    req: Request
+) -> str:
+    """
+    Resolve which repository to search.
+    
+    Priority: repo_id > demo_repo > default "flask"
+    
+    For user-indexed repos, validates session ownership and expiry.
+    Demo repos are always accessible without auth.
+    
+    Returns:
+        repo_id string
+        
+    Raises:
+        HTTPException 403: Access denied (not owner)
+        HTTPException 410: Repo expired
+        HTTPException 404: Demo repo not found
+    """
+    # Case 1: Direct repo_id provided
+    if request.repo_id:
+        repo_id = request.repo_id
+        
+        # Demo repos bypass auth check
+        if repo_id in DEMO_REPO_IDS.values():
+            logger.debug("Search on demo repo via repo_id", repo_id=repo_id[:16])
+            return repo_id
+        
+        # User-indexed repo - validate ownership
+        return _validate_user_repo_access(repo_id, limiter, limit_result, req)
+    
+    # Case 2: Fall back to demo_repo or default
+    demo_name = request.demo_repo or "flask"
+    repo_id = DEMO_REPO_IDS.get(demo_name)
+    
+    if repo_id:
+        logger.debug("Search on demo repo", demo_name=demo_name)
+        return repo_id
+    
+    # Case 3: Demo not in mapping, try first indexed repo
+    repos = repo_manager.list_repos()
+    indexed_repos = [r for r in repos if r.get("status") == "indexed"]
+    
+    if indexed_repos:
+        fallback_id = indexed_repos[0]["id"]
+        logger.debug("Using fallback indexed repo", repo_id=fallback_id[:16])
+        return fallback_id
+    
+    logger.warning("No demo repo available", requested=demo_name)
+    raise HTTPException(
+        status_code=404,
+        detail=f"Demo repo '{demo_name}' not available"
+    )
+
+
+def _validate_user_repo_access(
+    repo_id: str,
+    limiter: PlaygroundLimiter,
+    limit_result,
+    req: Request
+) -> str:
+    """
+    Validate that the session owns the requested user-indexed repo.
+    
+    Returns:
+        repo_id if valid
+        
+    Raises:
+        HTTPException 403: No session or not owner
+        HTTPException 410: Repo expired
+    """
+    session_token = limit_result.session_token or _get_session_token(req)
+    token_preview = session_token[:8] if session_token else "none"
+    
+    # No session token at all
+    if not session_token:
+        logger.warning(
+            "Search denied - no session token",
+            repo_id=repo_id[:16]
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "access_denied",
+                "message": "You don't have access to this repository"
+            }
+        )
+    
+    # Get session data and check ownership
+    session_data = limiter.get_session_data(session_token)
+    indexed_repo = session_data.indexed_repo
+    session_repo_id = indexed_repo.get("repo_id") if indexed_repo else None
+    
+    if not indexed_repo or session_repo_id != repo_id:
+        logger.warning(
+            "Search denied - repo not owned by session",
+            requested_repo_id=repo_id[:16],
+            session_repo_id=session_repo_id[:16] if session_repo_id else "none",
+            session_token=token_preview
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "access_denied",
+                "message": "You don't have access to this repository"
+            }
+        )
+    
+    # Check expiry
+    repo_data = IndexedRepoData.from_dict(indexed_repo)
+    if repo_data.is_expired():
+        logger.warning(
+            "Search denied - repo expired",
+            repo_id=repo_id[:16],
+            expired_at=indexed_repo.get("expires_at"),
+            session_token=token_preview
+        )
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "repo_expired",
+                "message": "Repository index expired. Re-index to continue searching.",
+                "can_reindex": True
+            }
+        )
+    
+    # All checks passed
+    logger.info(
+        "Search on user-indexed repo",
+        repo_id=repo_id[:16],
+        repo_name=indexed_repo.get("name"),
+        session_token=token_preview
+    )
+    return repo_id
 
 
 @router.get("/limits")
@@ -270,18 +410,8 @@ async def playground_search(
     if not valid_query:
         raise HTTPException(status_code=400, detail=f"Invalid query: {query_error}")
 
-    # Get demo repo ID
-    repo_id = DEMO_REPO_IDS.get(request.demo_repo)
-    if not repo_id:
-        repos = repo_manager.list_repos()
-        indexed_repos = [r for r in repos if r.get("status") == "indexed"]
-        if indexed_repos:
-            repo_id = indexed_repos[0]["id"]
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Demo repo '{request.demo_repo}' not available"
-            )
+    # Resolve repo_id: priority is repo_id > demo_repo > default "flask"
+    repo_id = _resolve_repo_id(request, limiter, limit_result, req)
 
     start_time = time.time()
 

@@ -5,7 +5,7 @@ Tests the POST /playground/index endpoint and related functionality.
 Note: These tests rely on conftest.py for Pinecone/OpenAI/Redis mocking.
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timezone, timedelta
 import json
 
@@ -679,3 +679,203 @@ class TestStatusEndpoint:
         data = response.json()
         assert data["partial"] is True
         assert data["max_files"] == 200
+
+
+
+# =============================================================================
+# Issue #128: Search User-Indexed Repos Tests
+# =============================================================================
+
+class TestSearchUserRepos:
+    """Tests for searching user-indexed repositories."""
+
+    @patch('routes.playground._get_limiter')
+    @patch('routes.playground.indexer')
+    def test_search_with_repo_id_user_owns(self, mock_indexer, mock_get_limiter, client):
+        """User can search their own indexed repo via repo_id."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token="test_session_123"
+        )
+        # Session owns this repo
+        mock_limiter.get_session_data.return_value = MagicMock(
+            indexed_repo={
+                "repo_id": "repo_user_abc123",
+                "github_url": "https://github.com/user/repo",
+                "name": "repo",
+                "file_count": 50,
+                "indexed_at": "2024-01-01T00:00:00Z",
+                "expires_at": "2099-01-02T00:00:00Z"  # Far future
+            }
+        )
+        mock_get_limiter.return_value = mock_limiter
+        mock_indexer.semantic_search = AsyncMock(return_value=[
+            {"file": "test.py", "score": 0.9}
+        ])
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test function", "repo_id": "repo_user_abc123"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+
+    @patch('routes.playground._get_limiter')
+    def test_search_repo_id_not_owned_returns_403(self, mock_get_limiter, client):
+        """Searching repo_id user doesn't own returns 403."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token="test_session_123"
+        )
+        # Session owns different repo
+        mock_limiter.get_session_data.return_value = MagicMock(
+            indexed_repo={
+                "repo_id": "repo_OTHER_xyz",
+                "github_url": "https://github.com/other/repo",
+                "name": "other-repo",
+                "file_count": 50,
+                "indexed_at": "2024-01-01T00:00:00Z",
+                "expires_at": "2099-01-02T00:00:00Z"
+            }
+        )
+        mock_get_limiter.return_value = mock_limiter
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test", "repo_id": "repo_user_abc123"}
+        )
+
+        assert response.status_code == 403
+        data = response.json()
+        assert data["detail"]["error"] == "access_denied"
+
+    @patch('routes.playground._get_limiter')
+    def test_search_repo_id_no_session_repo_returns_403(self, mock_get_limiter, client):
+        """Searching repo_id when session has no indexed repo returns 403."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token="test_session_123"
+        )
+        # Session has no indexed repo
+        mock_limiter.get_session_data.return_value = MagicMock(indexed_repo=None)
+        mock_get_limiter.return_value = mock_limiter
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test", "repo_id": "repo_user_abc123"}
+        )
+
+        assert response.status_code == 403
+
+    @patch('routes.playground._get_limiter')
+    def test_search_expired_repo_returns_410(self, mock_get_limiter, client):
+        """Searching expired repo returns 410 with can_reindex hint."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token="test_session_123"
+        )
+        # Session owns repo but it's expired
+        mock_limiter.get_session_data.return_value = MagicMock(
+            indexed_repo={
+                "repo_id": "repo_user_abc123",
+                "github_url": "https://github.com/user/repo",
+                "name": "repo",
+                "file_count": 50,
+                "indexed_at": "2024-01-01T00:00:00Z",
+                "expires_at": "2024-01-01T00:00:01Z"  # Already expired
+            }
+        )
+        mock_get_limiter.return_value = mock_limiter
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test", "repo_id": "repo_user_abc123"}
+        )
+
+        assert response.status_code == 410
+        data = response.json()
+        assert data["detail"]["error"] == "repo_expired"
+        assert data["detail"]["can_reindex"] is True
+
+    @patch('routes.playground._get_limiter')
+    @patch('routes.playground.indexer')
+    def test_search_demo_repo_via_repo_id_allowed(self, mock_indexer, mock_get_limiter, client):
+        """Demo repos can be accessed via repo_id without ownership check."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token="test_session_123"
+        )
+        mock_get_limiter.return_value = mock_limiter
+        mock_indexer.semantic_search = AsyncMock(return_value=[])
+
+        # Use the flask demo repo ID
+        from routes.playground import DEMO_REPO_IDS
+        flask_repo_id = DEMO_REPO_IDS.get("flask")
+        
+        if flask_repo_id:
+            response = client.post(
+                "/api/v1/playground/search",
+                json={"query": "route handler", "repo_id": flask_repo_id}
+            )
+            assert response.status_code == 200
+
+    @patch('routes.playground._get_limiter')
+    @patch('routes.playground.indexer')
+    def test_search_backward_compat_demo_repo(self, mock_indexer, mock_get_limiter, client):
+        """Backward compat: demo_repo parameter still works."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token=None
+        )
+        mock_get_limiter.return_value = mock_limiter
+        mock_indexer.semantic_search = AsyncMock(return_value=[])
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test", "demo_repo": "flask"}
+        )
+
+        # Should work (200) or 404 if flask not indexed - but not 4xx auth error
+        assert response.status_code in [200, 404]
+
+    @patch('routes.playground._get_limiter')
+    @patch('routes.playground.indexer')
+    def test_search_default_to_flask_when_no_repo_specified(self, mock_indexer, mock_get_limiter, client):
+        """When neither repo_id nor demo_repo provided, defaults to flask."""
+        mock_limiter = MagicMock()
+        mock_limiter.check_and_record.return_value = MagicMock(
+            allowed=True,
+            remaining=99,
+            limit=100,
+            session_token=None
+        )
+        mock_get_limiter.return_value = mock_limiter
+        mock_indexer.semantic_search = AsyncMock(return_value=[])
+
+        response = client.post(
+            "/api/v1/playground/search",
+            json={"query": "test"}  # No repo_id or demo_repo
+        )
+
+        # Should default to flask
+        assert response.status_code in [200, 404]
