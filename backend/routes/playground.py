@@ -76,6 +76,7 @@ class IndexRepoRequest(BaseModel):
     """
     github_url: str
     branch: Optional[str] = None  # None = use repo's default branch
+    partial: bool = False  # If True, index first 200 files of large repos
 
     @field_validator("github_url")
     @classmethod
@@ -653,8 +654,9 @@ async def start_anonymous_indexing(
     client_ip = _get_client_ip(req)
 
     if not session_token:
-        # Create new session
-        session_token = limiter.create_session()
+        # Create new session - generate token first, then create session
+        session_token = limiter._generate_session_token()
+        limiter.create_session(session_token)
         _set_session_cookie(response, session_token)
         logger.info("Created new session for indexing",
                     session_token=session_token[:8],
@@ -767,18 +769,32 @@ async def start_anonymous_indexing(
         file_count = max(repo_size_kb // 3, 1)
 
     # Check file limit
+    is_partial = False
+    files_to_index = file_count
+
     if file_count > ANONYMOUS_FILE_LIMIT:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "validation_failed",
-                "reason": "too_large",
-                "message": f"Repository has {file_count:,} code files. "
-                           f"Anonymous limit is {ANONYMOUS_FILE_LIMIT}.",
-                "file_count": file_count,
-                "limit": ANONYMOUS_FILE_LIMIT
-            }
-        )
+        if request.partial:
+            # Partial indexing - cap at limit
+            is_partial = True
+            files_to_index = ANONYMOUS_FILE_LIMIT
+            logger.info("Partial indexing enabled",
+                        total_files=file_count,
+                        indexing=files_to_index)
+        else:
+            # Reject large repos without partial flag
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "validation_failed",
+                    "reason": "too_large",
+                    "message": f"Repository has {file_count:,} code files. "
+                               f"Anonymous limit is {ANONYMOUS_FILE_LIMIT}. "
+                               f"Use partial=true to index first {ANONYMOUS_FILE_LIMIT} files.",
+                    "file_count": file_count,
+                    "limit": ANONYMOUS_FILE_LIMIT,
+                    "hint": "Set partial=true to index a subset of files"
+                }
+            )
 
     # --- Validation passed! Create job and start background indexing ---
 
@@ -796,7 +812,9 @@ async def start_anonymous_indexing(
         owner=owner,
         repo_name=repo_name,
         branch=branch,
-        file_count=file_count
+        file_count=file_count,
+        is_partial=is_partial,
+        max_files=files_to_index
     )
 
     # Queue background task
@@ -811,7 +829,8 @@ async def start_anonymous_indexing(
         owner=owner,
         repo_name=repo_name,
         branch=branch,
-        file_count=file_count
+        file_count=files_to_index,  # Actual files to index (may be capped)
+        max_files=files_to_index if is_partial else None  # Limit for partial indexing
     )
 
     logger.info("Indexing job queued",
@@ -819,17 +838,29 @@ async def start_anonymous_indexing(
                 owner=owner,
                 repo=repo_name,
                 branch=branch,
-                file_count=file_count,
+                file_count=files_to_index,
+                is_partial=is_partial,
                 session_token=session_token[:8],
                 response_time_ms=response_time_ms)
 
     # Estimate time based on file count (~0.3s per file)
-    estimated_seconds = max(10, int(file_count * 0.3))
+    estimated_seconds = max(10, int(files_to_index * 0.3))
 
-    return {
+    response_data = {
         "job_id": job_id,
         "status": "queued",
         "estimated_time_seconds": estimated_seconds,
-        "file_count": file_count,
+        "file_count": files_to_index,
         "message": f"Indexing started. Poll /playground/index/{job_id} for status."
     }
+
+    # Add partial info if applicable
+    if is_partial:
+        response_data["partial"] = True
+        response_data["total_files"] = file_count
+        response_data["message"] = (
+            f"Partial indexing started ({files_to_index} of {file_count} files). "
+            f"Poll /playground/index/{job_id} for status."
+        )
+
+    return response_data

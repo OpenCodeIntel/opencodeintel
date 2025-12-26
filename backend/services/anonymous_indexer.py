@@ -93,7 +93,9 @@ class AnonymousIndexingJob:
         owner: str,
         repo_name: str,
         branch: str,
-        file_count: int
+        file_count: int,
+        is_partial: bool = False,
+        max_files: Optional[int] = None
     ) -> dict:
         """
         Create a new indexing job in Redis.
@@ -111,6 +113,8 @@ class AnonymousIndexingJob:
             "repo_name": repo_name,
             "branch": branch,
             "file_count": file_count,
+            "is_partial": is_partial,
+            "max_files": max_files,
             "status": JobStatus.QUEUED.value,
             "progress": None,
             "stats": None,
@@ -225,13 +229,17 @@ async def run_indexing_job(
     owner: str,
     repo_name: str,
     branch: str,
-    file_count: int
+    file_count: int,
+    max_files: Optional[int] = None
 ) -> None:
     """
     Background task to clone and index a repository.
 
     This runs asynchronously after the endpoint returns.
     Updates Redis with progress and final status.
+
+    Args:
+        max_files: If set, limit indexing to first N files (for partial indexing)
     """
     import time
     start_time = time.time()
@@ -286,7 +294,8 @@ async def run_indexing_job(
                 indexer.index_repository_with_progress(
                     repo_id,
                     str(temp_path),
-                    progress_callback
+                    progress_callback,
+                    max_files=max_files
                 ),
                 timeout=job_manager.INDEX_TIMEOUT_SECONDS
             )

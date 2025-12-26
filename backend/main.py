@@ -98,11 +98,22 @@ app.add_api_websocket_route(f"{API_PREFIX}/ws/index/{{repo_id}}", websocket_inde
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with clear messages."""
+    # Convert errors to JSON-serializable format
+    errors = []
+    for err in exc.errors():
+        error_dict = {
+            "type": err.get("type"),
+            "loc": err.get("loc"),
+            "msg": err.get("msg"),
+            "input": str(err.get("input")) if err.get("input") is not None else None,
+        }
+        errors.append(error_dict)
+
     return JSONResponse(
         status_code=422,
         content={
             "detail": "Validation error",
-            "errors": exc.errors()
+            "errors": errors
         }
     )
 
