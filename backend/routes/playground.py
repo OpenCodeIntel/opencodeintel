@@ -864,3 +864,161 @@ async def start_anonymous_indexing(
         )
 
     return response_data
+
+
+# =============================================================================
+# GET /playground/index/{job_id} - Check indexing job status (#126)
+# =============================================================================
+
+@router.get(
+    "/index/{job_id}",
+    summary="Check indexing job status",
+    description="Poll this endpoint to check the status of an indexing job.",
+    responses={
+        200: {
+            "description": "Job status",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "queued": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "queued",
+                                "message": "Job is queued for processing"
+                            }
+                        },
+                        "processing": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "processing",
+                                "progress": {
+                                    "files_processed": 50,
+                                    "files_total": 100,
+                                    "functions_found": 250,
+                                    "percent_complete": 50
+                                }
+                            }
+                        },
+                        "completed": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "completed",
+                                "repo_id": "anon_idx_abc123",
+                                "stats": {
+                                    "files_indexed": 100,
+                                    "functions_found": 500,
+                                    "time_taken_seconds": 45.2
+                                }
+                            }
+                        },
+                        "failed": {
+                            "value": {
+                                "job_id": "idx_abc123",
+                                "status": "failed",
+                                "error": "clone_failed",
+                                "error_message": "Repository not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {"description": "Job not found or expired"}
+    }
+)
+async def get_indexing_status(
+    job_id: str,
+    req: Request
+):
+    """
+    Check the status of an anonymous indexing job.
+
+    Poll this endpoint after starting an indexing job to track progress.
+    Jobs expire after 1 hour.
+
+    Status values:
+    - queued: Job is waiting to start
+    - cloning: Repository is being cloned
+    - processing: Files are being indexed
+    - completed: Indexing finished successfully
+    - failed: Indexing failed (check error field)
+    """
+    # Validate job_id format
+    if not job_id or not job_id.startswith("idx_"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_job_id",
+                "message": "Invalid job ID format"
+            }
+        )
+
+    # Get job from Redis
+    job_manager = AnonymousIndexingJob(redis_client)
+    job = job_manager.get_job(job_id)
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "job_not_found",
+                "message": "Job not found or has expired. Jobs expire after 1 hour."
+            }
+        )
+
+    # Build response based on status
+    status = job.get("status", "unknown")
+    response = {
+        "job_id": job_id,
+        "status": status,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+    # Add repo info
+    response["repository"] = {
+        "owner": job.get("owner"),
+        "name": job.get("repo_name"),
+        "branch": job.get("branch"),
+        "github_url": job.get("github_url"),
+    }
+
+    # Add partial info if applicable
+    if job.get("is_partial"):
+        response["partial"] = True
+        response["max_files"] = job.get("max_files")
+
+    # Status-specific fields
+    if status == "queued":
+        response["message"] = "Job is queued for processing"
+
+    elif status == "cloning":
+        response["message"] = "Cloning repository..."
+
+    elif status == "processing":
+        response["message"] = "Indexing files..."
+        if job.get("progress"):
+            progress = job["progress"]
+            files_processed = progress.get("files_processed", 0)
+            files_total = progress.get("files_total", 1)
+            percent = round((files_processed / files_total) * 100) if files_total > 0 else 0
+            response["progress"] = {
+                "files_processed": files_processed,
+                "files_total": files_total,
+                "functions_found": progress.get("functions_found", 0),
+                "percent_complete": percent,
+                "current_file": progress.get("current_file")
+            }
+
+    elif status == "completed":
+        response["message"] = "Indexing completed successfully"
+        response["repo_id"] = job.get("repo_id")
+        if job.get("stats"):
+            response["stats"] = job["stats"]
+
+    elif status == "failed":
+        response["message"] = job.get("error_message", "Indexing failed")
+        response["error"] = job.get("error", "unknown_error")
+        response["error_message"] = job.get("error_message")
+
+    return response

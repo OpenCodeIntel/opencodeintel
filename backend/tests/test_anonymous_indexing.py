@@ -5,7 +5,7 @@ Tests the POST /playground/index endpoint and related functionality.
 Note: These tests rely on conftest.py for Pinecone/OpenAI/Redis mocking.
 """
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
 import json
 
@@ -512,3 +512,170 @@ class TestSessionConflict:
 
         assert response.status_code == 202
         assert response.json()["job_id"] == "idx_new123456"
+
+
+# =============================================================================
+# STATUS ENDPOINT TESTS (GET /playground/index/{job_id})
+# =============================================================================
+
+class TestStatusEndpoint:
+    """Tests for GET /playground/index/{job_id} status endpoint."""
+
+    @pytest.fixture
+    def client(self):
+        """Create test client."""
+        from fastapi.testclient import TestClient
+        from main import app
+        return TestClient(app)
+
+    def test_invalid_job_id_format_returns_400(self, client):
+        """Invalid job ID format returns 400."""
+        response = client.get("/api/v1/playground/index/invalid_format")
+        assert response.status_code == 400
+        assert response.json()["detail"]["error"] == "invalid_job_id"
+
+    def test_job_not_found_returns_404(self, client):
+        """Non-existent job returns 404."""
+        response = client.get("/api/v1/playground/index/idx_nonexistent123")
+        assert response.status_code == 404
+        assert response.json()["detail"]["error"] == "job_not_found"
+
+    @patch('routes.playground.AnonymousIndexingJob')
+    def test_queued_job_returns_status(self, mock_job_class, client):
+        """Queued job returns correct status."""
+        mock_job_manager = MagicMock()
+        mock_job_manager.get_job.return_value = {
+            "job_id": "idx_test123456",
+            "status": "queued",
+            "owner": "user",
+            "repo_name": "repo",
+            "branch": "main",
+            "github_url": "https://github.com/user/repo",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        }
+        mock_job_class.return_value = mock_job_manager
+
+        response = client.get("/api/v1/playground/index/idx_test123456")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "queued"
+        assert data["message"] == "Job is queued for processing"
+
+    @patch('routes.playground.AnonymousIndexingJob')
+    def test_processing_job_returns_progress(self, mock_job_class, client):
+        """Processing job returns progress info."""
+        mock_job_manager = MagicMock()
+        mock_job_manager.get_job.return_value = {
+            "job_id": "idx_test123456",
+            "status": "processing",
+            "owner": "user",
+            "repo_name": "repo",
+            "branch": "main",
+            "github_url": "https://github.com/user/repo",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:01Z",
+            "progress": {
+                "files_processed": 50,
+                "files_total": 100,
+                "functions_found": 250,
+                "current_file": "src/index.ts"
+            }
+        }
+        mock_job_class.return_value = mock_job_manager
+
+        response = client.get("/api/v1/playground/index/idx_test123456")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "processing"
+        assert data["progress"]["files_processed"] == 50
+        assert data["progress"]["percent_complete"] == 50
+
+    @patch('routes.playground.AnonymousIndexingJob')
+    def test_completed_job_returns_repo_id(self, mock_job_class, client):
+        """Completed job returns repo_id and stats."""
+        mock_job_manager = MagicMock()
+        mock_job_manager.get_job.return_value = {
+            "job_id": "idx_test123456",
+            "status": "completed",
+            "owner": "user",
+            "repo_name": "repo",
+            "branch": "main",
+            "github_url": "https://github.com/user/repo",
+            "repo_id": "anon_idx_test123456",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:01:00Z",
+            "stats": {
+                "files_indexed": 100,
+                "functions_found": 500,
+                "time_taken_seconds": 45.2
+            }
+        }
+        mock_job_class.return_value = mock_job_manager
+
+        response = client.get("/api/v1/playground/index/idx_test123456")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["repo_id"] == "anon_idx_test123456"
+        assert data["stats"]["files_indexed"] == 100
+
+    @patch('routes.playground.AnonymousIndexingJob')
+    def test_failed_job_returns_error(self, mock_job_class, client):
+        """Failed job returns error details."""
+        mock_job_manager = MagicMock()
+        mock_job_manager.get_job.return_value = {
+            "job_id": "idx_test123456",
+            "status": "failed",
+            "owner": "user",
+            "repo_name": "repo",
+            "branch": "main",
+            "github_url": "https://github.com/user/repo",
+            "error": "clone_failed",
+            "error_message": "Repository not found or access denied",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:30Z",
+        }
+        mock_job_class.return_value = mock_job_manager
+
+        response = client.get("/api/v1/playground/index/idx_test123456")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failed"
+        assert data["error"] == "clone_failed"
+        assert "not found" in data["error_message"].lower()
+
+    @patch('routes.playground.AnonymousIndexingJob')
+    def test_partial_job_includes_partial_info(self, mock_job_class, client):
+        """Partial indexing job includes partial flag."""
+        mock_job_manager = MagicMock()
+        mock_job_manager.get_job.return_value = {
+            "job_id": "idx_test123456",
+            "status": "processing",
+            "owner": "user",
+            "repo_name": "large-repo",
+            "branch": "main",
+            "github_url": "https://github.com/user/large-repo",
+            "is_partial": True,
+            "max_files": 200,
+            "file_count": 500,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:10Z",
+            "progress": {
+                "files_processed": 100,
+                "files_total": 200,
+                "functions_found": 400
+            }
+        }
+        mock_job_class.return_value = mock_job_manager
+
+        response = client.get("/api/v1/playground/index/idx_test123456")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["partial"] is True
+        assert data["max_files"] == 200
