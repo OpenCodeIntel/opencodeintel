@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <strong>AI-powered semantic code search for your repositories</strong>
+  <strong>Finally understand your codebase</strong>
 </p>
 
 <p align="center">
@@ -21,72 +21,79 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
-  <a href="./docs/deployment.md">Deployment</a> •
-  <a href="./docs/mcp-setup.md">MCP Integration</a> •
+  <a href="./docs/deployment.md">Docs</a> •
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
 
+You know that mass of code you inherited? The one where you spend 20 minutes grep-ing just to find where authentication happens? Where you're scared to change anything because you don't know what might break?
+
+**OpenCodeIntel fixes that.**
+
+Search your code by what it *does*, not what it's named. Ask for "error handling" and find it—even when the function is called `processFailure()`.
+
 <!-- Demo screenshot placeholder -->
 <!-- <p align="center">
-  <img src="docs/assets/demo.png" alt="OpenCodeIntel Dashboard" width="800" />
+  <img src="docs/assets/demo.png" alt="OpenCodeIntel Demo" width="800" />
 </p> -->
 
-## What is OpenCodeIntel?
+## See it in action
 
-OpenCodeIntel gives AI coding assistants deep understanding of your codebase. It's an MCP server that provides semantic code search, dependency analysis, and impact prediction.
+| You search for... | It finds... |
+|-------------------|-------------|
+| `"authentication logic"` | `validateJWT()`, `checkSession()`, `authMiddleware.ts` |
+| `"where we handle payments"` | `stripe/checkout.ts`, `processRefund()`, `PaymentService` |
+| `"error handling"` | `processFailure()`, `onError()`, `catch` blocks across the codebase |
 
-**Search by meaning, not keywords.** Find "error handling logic" even when functions are named `processFailure()`.
+No regex. No exact matches. Just describe what you're looking for.
 
-## Features
+## What else?
 
-- **Semantic Search** - Vector-based code search that understands intent
-- **Dependency Graph** - Visualize how your codebase connects
-- **Impact Analysis** - Know what breaks before you change a file
-- **Code Style Analysis** - Understand team patterns and conventions
-- **MCP Integration** - Works directly with Claude Desktop
+**Dependency Graph** — See how your files connect. One glance shows you the architecture.
+
+**Impact Analysis** — About to change `auth.ts`? Know exactly what breaks before you touch it.
+
+**Code Style** — Understand your team's patterns. snake_case or camelCase? How are errors handled?
+
+**Works with Claude** — Connects as an MCP server. Your AI assistant finally understands your codebase.
 
 ## Quick Start
-
-### Using Docker (Recommended)
 
 ```bash
 git clone https://github.com/OpenCodeIntel/opencodeintel.git
 cd opencodeintel
 
 cp .env.example .env
-# Add your API keys to .env
+# Add your API keys
 
 docker compose up -d
 ```
 
-- Frontend: http://localhost:3000
-- Backend: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+Open http://localhost:3000. That's it.
 
-### Manual Setup
+<details>
+<summary><strong>Manual setup (without Docker)</strong></summary>
 
 **Requirements:** Python 3.11+, Node.js 20+
 
 ```bash
 # Backend
 cd backend
-python -m venv venv
-source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 python main.py
 
 # Frontend (new terminal)
 cd frontend
-npm install
-npm run dev
+npm install && npm run dev
 ```
 
-## MCP Integration
+</details>
 
-Connect OpenCodeIntel to Claude Desktop for AI-powered code assistance.
+<details>
+<summary><strong>Connect to Claude Desktop (MCP)</strong></summary>
 
 Add to your Claude Desktop config:
 
@@ -105,41 +112,38 @@ Add to your Claude Desktop config:
 }
 ```
 
-**Available tools:** `search_code`, `list_repositories`, `get_dependency_graph`, `analyze_code_style`, `analyze_impact`, `get_repository_insights`
+See [full MCP setup guide](./docs/mcp-setup.md).
 
-See [MCP Setup Guide](./docs/mcp-setup.md) for detailed instructions.
+</details>
 
 ## Architecture
 
 ```
-Frontend (React + TypeScript)
-     ↓
-Backend (FastAPI + Python)
-     ↓
-┌────┴────┬────────────┐
-Pinecone  Supabase    Redis
-(vectors) (database)  (cache)
+┌─────────────────────────────────────────┐
+│           Frontend (React)              │
+└─────────────────┬───────────────────────┘
+                  │
+┌─────────────────▼───────────────────────┐
+│          Backend (FastAPI)              │
+└───────┬─────────┬─────────┬─────────────┘
+        │         │         │
+   ┌────▼───┐ ┌───▼────┐ ┌──▼───┐
+   │Pinecone│ │Supabase│ │Redis │
+   │vectors │ │database│ │cache │
+   └────────┘ └────────┘ └──────┘
 ```
 
-**Stack:** FastAPI, React, TypeScript, Pinecone, Supabase, Redis, tree-sitter
+## Docs
 
-## Documentation
-
-| Guide | Description |
-|-------|-------------|
-| [Docker Quickstart](./docs/docker-quickstart.md) | Get running in 5 minutes |
-| [Deployment](./docs/deployment.md) | Production deployment guide |
-| [MCP Setup](./docs/mcp-setup.md) | Claude Desktop integration |
-| [Docker Troubleshooting](./docs/docker-troubleshooting.md) | Common issues and fixes |
+- [Docker Quickstart](./docs/docker-quickstart.md) — Running in 5 minutes
+- [Deployment Guide](./docs/deployment.md) — Production setup
+- [MCP Integration](./docs/mcp-setup.md) — Claude Desktop setup
+- [Troubleshooting](./docs/docker-troubleshooting.md) — Common fixes
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
-
-**Quick links:**
-- [Open Issues](https://github.com/OpenCodeIntel/opencodeintel/issues)
-- [Good First Issues](https://github.com/OpenCodeIntel/opencodeintel/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+We'd love your help. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-MIT License - see [LICENSE](./LICENSE) for details.
+[MIT](./LICENSE)
