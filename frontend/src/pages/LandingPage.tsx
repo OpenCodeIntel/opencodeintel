@@ -1,10 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Navbar, Hero, ResultsView } from '@/components/landing'
+import { Navbar, Hero, ResultsView, Features, Pricing, FAQ, Footer } from '@/components/landing'
 import { API_URL } from '@/config/api'
 import { playgroundAPI } from '@/services/playground-api'
 import type { SearchResult } from '@/types'
 
+/**
+ * Render the landing page and manage its search state and flows.
+ *
+ * Manages local state for search results, loading, timing, query inputs, repository selection,
+ * and rate-limiting. On mount it fetches playground limits and updates remaining/limit.
+ * Exposes behavior to perform searches (against a demo repo or a custom playground), handle
+ * hero-initiated results, re-search the current query, and reset to the initial landing view.
+ *
+ * @returns The landing page React element containing a Navbar and either a ResultsView (after a search)
+ * or the public landing sections (Hero, Features, Pricing, FAQ, Footer).
+ */
 export function LandingPage() {
   const navigate = useNavigate()
   
@@ -93,7 +104,7 @@ export function LandingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-white">
+    <div className="min-h-screen bg-background text-foreground">
       <Navbar minimal={hasSearched} />
 
       {hasSearched ? (
@@ -113,7 +124,13 @@ export function LandingPage() {
           onSignUp={() => navigate('/signup')}
         />
       ) : (
-        <Hero onResultsReady={handleHeroResults} />
+        <>
+          <Hero onResultsReady={handleHeroResults} />
+          <Features />
+          <Pricing />
+          <FAQ />
+          <Footer />
+        </>
       )}
     </div>
   )
