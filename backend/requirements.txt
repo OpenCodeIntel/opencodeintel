@@ -31,7 +31,7 @@ aiofiles>=24.0.0
 
 # Supabase (postgrest-py handled as dependency)
 supabase>=2.0.0
-pyjwt>=2.8.0  # JWT token verification for Supabase Auth
+pyjwt>=2.12.1  # JWT token verification for Supabase Auth
 
 # Testing
 pytest>=8.0.0
