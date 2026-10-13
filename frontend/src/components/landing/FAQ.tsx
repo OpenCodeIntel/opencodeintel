@@ -11,31 +11,33 @@ const FAQS = [
     q: 'How is this different from GitHub search or grep?',
     a: `Think about the last time you joined a new codebase. You knew what you needed ("the function that retries API calls") but had no idea what it was called. GitHub search and grep need exact keywords. If the function is named make_request_with_backoff, you'd never find it by searching "retry logic."
 
-OpenCodeIntel actually understands what code does, not just what it's named. We use AI embeddings trained specifically on code semantics. So you can search "retry logic with exponential backoff" and find it, even if those words appear nowhere in the file.`,
+OpenCodeIntel searches by meaning, not just by name. Each function is embedded together with its name, signature and docstring, so you can search "retry logic with exponential backoff" and find it, even if those words appear nowhere in the file.`,
   },
   {
     q: 'What languages do you support?',
-    a: `Right now, Python is our focus. We have deep support for Flask, FastAPI, and Django, meaning we understand routes, middleware, decorators, and framework-specific patterns.
+    a: `Python and JavaScript are indexed today. TypeScript files go through the JavaScript parser for now, so code that leans on type syntax can be missed. For Python, the style analysis also picks up Flask, FastAPI and Django patterns like routes, middleware and decorators.
 
-TypeScript and JavaScript are next on our roadmap, followed by Go and Rust. The good news: OpenCodeIntel is completely open source. If you need a language we don't support yet, you can contribute a parser or sponsor its development. Our architecture is built to be language-agnostic from day one.`,
+A real TypeScript parser is the next language step, then Go and Rust. OpenCodeIntel is open source, so if you need a language we don't support yet, you can contribute a parser.`,
   },
   {
     q: 'How does MCP integration work?',
-    a: `MCP (Model Context Protocol) is how AI assistants like Claude and Cursor talk to external tools. OpenCodeIntel runs as an MCP server that these tools can connect to.
+    a: `MCP (Model Context Protocol) is how AI assistants like Claude and Cursor talk to external tools. Alongside its web app and REST API, OpenCodeIntel ships a 12-tool MCP server that these tools can connect to.
 
 Once connected, your AI assistant gains the ability to semantically search your entire codebase. When you ask Claude "how does authentication work in this project?", it can actually find and read the relevant code instead of guessing. It's like giving your AI assistant a senior developer's knowledge of your codebase.`,
   },
   {
     q: 'Is my code stored on your servers?',
-    a: `We never store your raw source code. What we store are vector embeddings, which are mathematical representations of what your code does. Think of it like storing a summary, not the actual document. You can delete these anytime from your dashboard.
+    a: `Yes. To index a repository we clone it to our server and keep the clone, so later re-indexes only process the files that changed. Code is sent to OpenAI to create embeddings. The search index stores each function's embedding with its file path, signature, docstring and the first 1,000 characters of its code, so results can show you the match.
 
-But if you want complete control, you can self-host OpenCodeIntel on your own infrastructure. It's fully open source under MIT license. Your code never leaves your servers, and you get the same search quality. Many teams with sensitive codebases go this route.`,
+Deleting a repository from your dashboard removes the clone and its database records. Removing its entries from the search index is not automated yet; we're fixing that (issue #336).
+
+If your code can't sit on our servers, you can self-host OpenCodeIntel. It's open source under the MIT license. Self-hosted, the clone stays on your machines, but embeddings are still created through the OpenAI API and the index lives in your own Pinecone account.`,
   },
   {
     q: 'How fast is indexing?',
-    a: `For most repositories under 100,000 lines of code, initial indexing takes about 1-2 minutes. We parse your code, generate embeddings, and build the search index in parallel.
+    a: `Initial indexing time depends on the size of the repository. We parse your code, create embeddings and write the search index in parallel batches.
 
-After the first index, updates are incremental. Change a file, and only that file gets re-indexed. This usually takes seconds. Search itself returns results in under 100ms regardless of how large your codebase is, because we're searching vectors, not scanning text.`,
+After the first index, updates are incremental: only the files changed since the last indexed commit are processed. On the public playground, a cold search takes 641ms at the median, and cached repeats come back in about 242ms.`,
   },
 ]
 

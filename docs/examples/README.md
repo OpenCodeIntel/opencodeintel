@@ -206,11 +206,11 @@ Total nodes: 23
 
 ## Performance Benchmarks
 
-Measured on production (api.opencodeintel.com, search v3 with reranking) on 2026-10-09, through the public playground: 30 unique cache-miss queries, then 15 of them repeated.
+Measured on production (api.opencodeintel.com) on 2026-10-09, through the public playground: 30 unique cache-miss queries, then 15 of them repeated. The playground runs search v3 without the reranker: vector search with keyword and code-graph boosts. The MCP `search_code` path (search v2: vector top 50, BM25 over those 50, RRF, Cohere rerank on the top 20) was not part of this run.
 
 | Search | p50 | p95 | Measured as |
 |---|---|---|---|
-| Cold (cache miss: embedding, hybrid retrieval, reranking) | 641ms | 1,380ms | server-reported search time |
+| Cold (cache miss: embedding, vector search, keyword and code-graph boosts) | 641ms | 1,380ms | server-reported search time |
 | Cached repeat | 242ms | 385ms | client wall time from Boston, network included |
 
 n is small (30 cold, 15 cached), so treat p95 as tail-indicative. The script and raw results live outside this repo; rerun the same playground queries to reproduce.

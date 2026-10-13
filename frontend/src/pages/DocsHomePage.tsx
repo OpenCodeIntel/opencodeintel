@@ -164,7 +164,7 @@ export function DocsHomePage() {
                 your architecture, and have no clue what breaks when you change something.
               </p>
               <p>
-                <strong className="text-white">The solution:</strong> OpenCodeIntel is an MCP server that 
+                <strong className="text-white">The solution:</strong> OpenCodeIntel is a platform (web app, REST API and MCP server) that 
                 gives AI assistants persistent memory of your codebase. Not just file contents but 
                 semantic understanding, dependency graphs, and impact analysis.
               </p>

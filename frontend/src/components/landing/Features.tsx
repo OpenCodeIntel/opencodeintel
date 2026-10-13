@@ -20,8 +20,8 @@ const FEATURES = [
   },
   {
     icon: Zap,
-    title: 'Instant Results',
-    description: 'Sub-100ms search across your entire codebase. No waiting, no spinning, just answers.',
+    title: 'Measured Speed',
+    description: 'A cold search on the public playground takes 641ms at the median. Cached repeats come back in about 242ms.',
     color: 'text-amber-400',
     bg: 'bg-amber-500/10',
     glow: 'group-hover:shadow-amber-500/20',

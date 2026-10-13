@@ -50,7 +50,7 @@ export function MCPSetupPage() {
         has no idea what you were talking about.
       </p>
       <p className="text-gray-300 text-lg leading-relaxed mb-8">
-        OpenCodeIntel fixes this. It is an MCP server that gives Claude (or any MCP-compatible AI) 
+        OpenCodeIntel fixes this. Its MCP server gives Claude (or any MCP-compatible AI) 
         persistent access to your codebase: semantic search, dependency graphs, impact analysis, 
         the works.
       </p>
